@@ -161,9 +161,86 @@ pub struct LibrarySearchParams {
     /// `music` (tracks), `sfx` (short sounds) or `any` (default).
     #[serde(default)]
     pub kind: Option<String>,
+    /// `all` (default), `incompetech` (Kevin MacLeod's ~1 500 tracks with mood and BPM),
+    /// `openverse` (Freesound, Jamendo, ccMixter, Wikimedia…) or `freesound` (needs the user's key).
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Tempo range for music (Incompetech tracks carry their BPM).
+    #[serde(default)]
+    pub min_bpm: Option<f64>,
+    #[serde(default)]
+    pub max_bpm: Option<f64>,
+    /// Length range in seconds.
+    #[serde(default)]
+    pub min_seconds: Option<f64>,
+    #[serde(default)]
+    pub max_seconds: Option<f64>,
     /// Results to return (1–50, default 12).
     #[serde(default)]
     pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MediaSearchParams {
+    /// What to look for, e.g. `neon city night`, `slow motion waves`, `rocket launch`, `cat`.
+    pub query: String,
+    /// `video` (default), `image`, `photo`, `illustration` or `sticker` (transparent PNGs).
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// `all` (default), `pexels`, `pixabay` (both need the user's free key), `openverse`, `nasa`
+    /// or `wikimedia`.
+    #[serde(default)]
+    pub source: Option<String>,
+    /// Prefer tall 9:16 results for TikTok / Reels / Shorts (default true).
+    #[serde(default)]
+    pub vertical: Option<bool>,
+    /// Results per source (1–50, default 10).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StickerParams {
+    /// An emoji (`💀`, `🔥`, `😭`) or a common name (`skull`, `fire`, `crying laughing`, `goat`, `moai`, `clown`…).
+    pub emoji: String,
+    /// Timeline time in seconds (default: the playhead).
+    #[serde(default)]
+    pub seconds: Option<f64>,
+    /// How long it stays (default 1.5 s).
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    /// `center`, `top`, `bottom`, `left`, `right`, `top-left`, `top-right`, `bottom-left`, `bottom-right` or [x, y] fractions.
+    #[serde(default)]
+    pub position: Option<Value>,
+    /// Width as a fraction of the frame width (default 0.28).
+    #[serde(default)]
+    pub width: Option<f64>,
+    /// `pop` (default), `bounce`, `fade`, `slide`, `spin` or `none`.
+    #[serde(default)]
+    pub animate: Option<String>,
+    /// Tilt in degrees.
+    #[serde(default)]
+    pub rotation: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct PacksParams {
+    /// A pack to download and install (`impact-sounds`, `interface-sounds`, `voiceover-pack-fighter`…); omit to list them.
+    #[serde(default)]
+    pub install: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct KeysParams {
+    /// `pexels`, `pixabay` or `freesound`; omit to see which keys are set and where to get them.
+    #[serde(default)]
+    pub service: Option<String>,
+    /// The user's API key to store (never shown again).
+    #[serde(default)]
+    pub key: Option<String>,
+    /// Forget the stored key for `service`.
+    #[serde(default)]
+    pub clear: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -182,6 +259,17 @@ pub struct LibraryDownloadParams {
     /// Clip gain in dB (e.g. -10 for a music bed under voice).
     #[serde(default)]
     pub gain_db: Option<f64>,
+    /// Pictures and footage: `broll` (default: full-frame cut-in above the main shot),
+    /// `overlay` (a smaller picture over the shot) or `none` (import only).
+    #[serde(default)]
+    pub r#as: Option<String>,
+    /// B-roll / overlay length in seconds.
+    #[serde(default)]
+    pub duration_seconds: Option<f64>,
+    /// Where to start inside the footage, in seconds (default: the start; long NASA / Wikimedia
+    /// videos start a third of the way in, past their title slate).
+    #[serde(default)]
+    pub source_seconds: Option<f64>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -608,7 +696,8 @@ impl FilmcraftMcp {
                     "recipes": c,
                     "soundEffects": by_cat,
                     "musicStyles": m["styles"],
-                    "online": "library_search / library_download: CC0 and CC BY music and sound effects; fonts_search / fonts_install: Google Fonts",
+                    "online": "library_search: music (Incompetech with BPM / mood, Openverse) and sound effects; library_packs: Kenney CC0 sound packs and announcer voices; media_search: B-roll footage, photos and stickers (Pexels / Pixabay with the user's key, Openverse, NASA, Wikimedia); library_download places any result; sticker_add: emoji stickers; fonts_search / fonts_install: Google Fonts; library_keys: the user's free API keys",
+                    "effects": "studio.fx.list: effect presets (vhs, glitch, flash, grain, letterbox…), colour looks (studio.look), transitions (studio.transition zoom / whip / flash / glitch / spin / shake, with sound), overlay positions and animations",
                     "playbook": "read the resource filmcraft://guide for the full editor playbook",
                     "essentials": [
                         "Look at the result (render_preview / ui_screenshot) after every significant step.",
@@ -626,19 +715,24 @@ impl FilmcraftMcp {
 
     #[tool(
         title = "Search free music & sounds online",
-        description = "Search openly licensed audio (Openverse: Freesound, Wikimedia Commons, ccMixter…). Only CC0, public domain, CC BY and CC BY-SA, all usable in monetised videos. kind: music | sfx | any. Results carry id, title, creator, licence, duration, tags and the attribution line (needsCredit tells whether it must be credited).",
+        description = "Search free music and sound effects usable in monetised TikTok / YouTube videos: Kevin MacLeod's Incompetech catalogue (~1 500 tracks with mood, genre and BPM; CC BY), Openverse (Freesound, Jamendo, ccMixter, Wikimedia; CC0 / CC BY / CC BY-SA only) and Freesound directly when the user added a key. kind: music | sfx | any; filter music by min_bpm / max_bpm and length. Results carry id, title, creator, licence, duration and the attribution line (needsCredit tells whether it must go in the description). For hundreds more CC0 game / UI / impact sounds and announcer voices see library_packs.",
         annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
     )]
     async fn library_search(&self, Parameters(p): Parameters<LibrarySearchParams>) -> Result<CallToolResult, McpError> {
-        let kind = p.kind.unwrap_or_else(|| "any".into());
-        let limit = p.limit.unwrap_or(12);
-        let r = tokio::task::spawn_blocking(move || crate::online::openverse_search(&p.query, &kind, limit)).await.unwrap_or_else(|e| Err(join_error(e)));
-        wrap(r.map(|v| json!({"results": v, "next": "library_download {id} downloads, imports and places one"})))
+        let kind = p.kind.unwrap_or_else(|| "any".into()).to_ascii_lowercase();
+        let source = p.source.unwrap_or_default().to_ascii_lowercase();
+        let limit = p.limit.unwrap_or(12).clamp(1, 50);
+        let filter = crate::online::incompetech::Filter { min_bpm: p.min_bpm, max_bpm: p.max_bpm, min_seconds: p.min_seconds, max_seconds: p.max_seconds };
+        let studio = filmcraft_engine::studio::library_dir();
+        let r = tokio::task::spawn_blocking(move || crate::online::audio_search(&p.query, &kind, &source, &filter, limit, studio.as_deref()))
+            .await
+            .unwrap_or_else(|e| Err(join_error(e)));
+        wrap(r.map(|(v, notes)| json!({"results": v, "notes": notes, "next": "library_download {id} downloads, imports and places one"})))
     }
 
     #[tool(
-        title = "Download free music / sound",
-        description = "Download a library_search result into the studio folder (with an .attribution sidecar), import it and place it on a free audio track at `seconds` (default: the playhead). Returns the clip and the credit line to put in the video description when needsCredit is true.",
+        title = "Download free music, sound or footage",
+        description = "Download a library_search or media_search result (with an .attribution sidecar) into the studio folder, import it and place it at `seconds` (default: the playhead): sounds on a free audio track, footage and pictures as a full-frame B-roll cut-in above the main shot (as: broll) or a smaller overlay (as: overlay). Returns the clip and the credit line to put in the video description when needsCredit is true.",
         annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = true)
     )]
     async fn library_download(&self, Parameters(p): Parameters<LibraryDownloadParams>) -> Result<CallToolResult, McpError> {
@@ -646,15 +740,15 @@ impl FilmcraftMcp {
             return Ok(fail("no studio folder on this platform"));
         };
         let id = p.id.clone();
-        let d = match tokio::task::spawn_blocking(move || crate::online::openverse_download(&id, &dir.join("downloads").join("audio")))
-            .await
-            .unwrap_or_else(|e| Err(join_error(e)))
-        {
+        let d = match tokio::task::spawn_blocking(move || crate::online::download_any(&id, &dir)).await.unwrap_or_else(|e| Err(join_error(e))) {
             Ok(d) => d,
             Err(e) => return Ok(fail(e)),
         };
         let path = d.path.to_string_lossy().into_owned();
-        let placed = if p.place.unwrap_or(true) {
+        let mode = p.r#as.as_deref().unwrap_or("broll").to_ascii_lowercase();
+        let placed = if !p.place.unwrap_or(true) || mode == "none" {
+            self.run("file.import", json!({"paths": [path]})).await
+        } else if d.kind == "audio" {
             let mut q = json!({"path": path, "gainDb": p.gain_db.unwrap_or(0.0)});
             if let Some(sec) = p.seconds {
                 q["seconds"] = json!(sec);
@@ -664,13 +758,112 @@ impl FilmcraftMcp {
             }
             self.run("studio.library.add", q).await
         } else {
-            self.run("file.import", json!({"paths": [path]})).await
+            let mut q = json!({"path": path});
+            if let Some(sec) = p.seconds {
+                q["seconds"] = json!(sec);
+            }
+            if let Some(dur) = p.duration_seconds {
+                q["durationSeconds"] = json!(dur);
+            }
+            if mode != "overlay" {
+                match p.source_seconds {
+                    Some(x) => q["sourceSeconds"] = json!(x),
+                    None => q["skipIntro"] = json!(p.id.starts_with("nasa:") || p.id.starts_with("wm:")),
+                }
+            }
+            self.run(if mode == "overlay" { "studio.overlay" } else { "studio.broll" }, q).await
         };
-        wrap(
-            placed.map(
-                |r| json!({"result": r, "path": path, "title": d.title, "license": d.license, "needsCredit": d.needs_credit, "attribution": d.attribution}),
-            ),
-        )
+        wrap(placed.map(|r| {
+            json!({"result": r, "path": path, "kind": d.kind, "title": d.title, "license": d.license, "needsCredit": d.needs_credit, "attribution": d.attribution})
+        }))
+    }
+
+    #[tool(
+        title = "Search free stock footage & pictures",
+        description = "Search B-roll videos, photos, illustrations and transparent stickers usable in monetised videos: Pexels and Pixabay (millions of vertical stock clips, no credit required; need the user's free key, see library_keys), Openverse images (CC0 / CC BY / CC BY-SA), NASA (space, launches, Earth; public domain) and Wikimedia Commons video. vertical (default true) puts 9:16 results first. Then library_download {id} places one as B-roll or overlay.",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn media_search(&self, Parameters(p): Parameters<MediaSearchParams>) -> Result<CallToolResult, McpError> {
+        let opts = crate::online::visual::Opts {
+            kind: p.kind.unwrap_or_else(|| "video".into()).to_ascii_lowercase(),
+            vertical: p.vertical.unwrap_or(true),
+            limit: p.limit.unwrap_or(10).clamp(1, 50),
+        };
+        let source = p.source.unwrap_or_else(|| "all".into()).to_ascii_lowercase();
+        let studio = filmcraft_engine::studio::library_dir();
+        let r = tokio::task::spawn_blocking(move || crate::online::visual::search(&p.query, &source, &opts, studio.as_deref()))
+            .await
+            .unwrap_or_else(|e| Err(join_error(e)));
+        wrap(r.map(|(v, notes)| json!({"results": v, "notes": notes, "next": "library_download {id, seconds, as: broll|overlay} places one"})))
+    }
+
+    #[tool(
+        title = "Add an emoji sticker",
+        description = "Put an emoji sticker (💀 🔥 😭 👀 🗿 🤡 💯… or a name like skull, fire, crying laughing) on the video at `seconds` with a pop / bounce / spin entrance: a 512 px Noto Emoji picture on its own track, sized and placed inside TikTok's safe zone. Pair it with a sound effect (studio.sfx.add pop / boom).",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = true)
+    )]
+    async fn sticker_add(&self, Parameters(p): Parameters<StickerParams>) -> Result<CallToolResult, McpError> {
+        let Some(dir) = filmcraft_engine::studio::library_dir() else {
+            return Ok(fail("no studio folder on this platform"));
+        };
+        let emoji = p.emoji.clone();
+        let d = match tokio::task::spawn_blocking(move || crate::online::sticker::download(&emoji, &crate::online::downloads_dir(&dir).join("stickers")))
+            .await
+            .unwrap_or_else(|e| Err(join_error(e)))
+        {
+            Ok(d) => d,
+            Err(e) => return Ok(fail(e)),
+        };
+        let mut q = json!({
+            "path": d.path.to_string_lossy(),
+            "durationSeconds": p.duration_seconds.unwrap_or(1.5),
+            "width": p.width.unwrap_or(0.28),
+            "animate": p.animate.unwrap_or_else(|| "pop".into()),
+            "position": p.position.unwrap_or_else(|| json!("center")),
+        });
+        if let Some(sec) = p.seconds {
+            q["seconds"] = json!(sec);
+        }
+        if let Some(r) = p.rotation {
+            q["rotation"] = json!(r);
+        }
+        let r = self.run("studio.overlay", q).await;
+        wrap(r.map(|r| json!({"result": r, "emoji": d.title, "attribution": d.attribution, "needsCredit": d.needs_credit})))
+    }
+
+    #[tool(
+        title = "Free sound packs (Kenney, CC0)",
+        description = "List or install Kenney's CC0 sound packs (no credit needed): impact sounds, interface sounds, UI audio, retro / digital, sci-fi, RPG, casino, music jingles and announcer voices ('fight', 'combo', 'game over', 'level up', 'mission completed'…). An installed pack lands in the studio library: studio.library.list {query} finds its sounds and studio.library.add places them.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn library_packs(&self, Parameters(p): Parameters<PacksParams>) -> Result<CallToolResult, McpError> {
+        let Some(dir) = filmcraft_engine::studio::library_dir() else {
+            return Ok(fail("no studio folder on this platform"));
+        };
+        let packs = crate::online::downloads_dir(&dir).join("packs");
+        let r = match p.install {
+            Some(name) => tokio::task::spawn_blocking(move || crate::online::packs::install(&name, &packs)).await.unwrap_or_else(|e| Err(join_error(e))),
+            None => Ok(json!({"packs": crate::online::packs::list(&packs), "install": "library_packs {install: \"<pack>\"}"})),
+        };
+        wrap(r)
+    }
+
+    #[tool(
+        title = "Library API keys",
+        description = "See or set the user's own free API keys for Pexels, Pixabay (stock footage and pictures) and Freesound (more sound effects). Without arguments: which keys are set and where to get one (keys are never shown). With service and key: store it privately in the studio folder; clear: true forgets it.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn library_keys(&self, Parameters(p): Parameters<KeysParams>) -> Result<CallToolResult, McpError> {
+        let Some(dir) = filmcraft_engine::studio::library_dir() else {
+            return Ok(fail("no studio folder on this platform"));
+        };
+        let r = match (p.service, p.key, p.clear.unwrap_or(false)) {
+            (Some(svc), _, true) => crate::online::keys::set(&svc, None, &dir).map(|()| json!({"service": svc, "configured": false})),
+            (Some(svc), Some(key), false) => crate::online::keys::set(&svc, Some(&key), &dir).map(|()| json!({"service": svc, "configured": true})),
+            (Some(_), None, false) => Err(AutomationError::Other("pass `key` to store it, or clear: true to forget it".into())),
+            (None, ..) => Ok(json!({"keys": crate::online::keys::status(Some(&dir))})),
+        };
+        wrap(r)
     }
 
     #[tool(
@@ -991,6 +1184,10 @@ mod tests {
             "library_download",
             "fonts_search",
             "fonts_install",
+            "media_search",
+            "sticker_add",
+            "library_packs",
+            "library_keys",
         ] {
             assert!(names.contains(&want), "{want} not listed");
         }

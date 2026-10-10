@@ -1,0 +1,60 @@
+# Windows x64 test build: every push to a `claude/**` work branch (and a manual run on any branch)
+# builds the unsigned MSI and zip the way release.yml does, runs the studio / online-library tests
+# on Windows, and keeps the installer as a 7-day artifact to try before merging. Signing happens
+# only in release.yml.
+name: Windows build
+
+on:
+  push:
+    branches: ["claude/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: windows-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  package:
+    name: Windows x64 (unsigned)
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # Fonts (optional build input): docs/contributing.md#building-with-craft-fonts
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: storytold/craft-fonts
+          ref: abb83316d96aa59c1cf64784289e378fe9fa5695 # same pin as release.yml
+          path: craft-fonts
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: windows-build-x64
+      - name: Studio and online-library tests
+        shell: pwsh
+        run: cargo test -p filmcraft-audio-dsp -p filmcraft-automation
+      - name: Install WiX
+        shell: pwsh
+        run: dotnet tool install --global wix --version 5.0.2
+      - name: Build and package (unsigned)
+        shell: pwsh
+        env:
+          CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
+          DIST: ${{ github.workspace }}\dist\x64
+        run: ./packaging/windows/package.ps1 -Arch x64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: filmcraft-windows-x64
+          path: dist/x64/*
+          if-no-files-found: error
+          retention-days: 7

@@ -157,12 +157,26 @@ the original copyright and permission notice in its header.
 
 ### Studio libraries (on request, by an agent or the user)
 
-`library_download` and `fonts_install` (MCP tools, `crates/automation/src/online.rs`) save files in
-the per-user studio folder (`<data dir>/studio/downloads/`), never in the repository or the app
-bundle. Audio comes from Openverse (`api.openverse.org`; Freesound, Wikimedia Commons, ccMixter…)
-and is limited to CC0, public domain, CC BY and CC BY-SA; each file gets an `.attribution` sidecar
-with the author, source, licence and credit line. Fonts come from Google Fonts
-(`fonts.google.com` / `fonts.gstatic.com`, SIL OFL / Apache-2.0 / UFL) with their licence text.
+`library_download`, `library_packs`, `sticker_add` and `fonts_install` (MCP tools,
+`crates/automation/src/online/`) save files in the per-user studio folder
+(`<data dir>/studio/downloads/`), never in the repository or the app bundle. Each file (or pack
+folder) gets an `.attribution` sidecar with the author, source, licence and credit line.
+
+| Source | What | Licences accepted |
+|---|---|---|
+| Openverse (`api.openverse.org`; Freesound, Jamendo, Wikimedia Commons, ccMixter, Flickr…) | music, sound effects, photos, illustrations | CC0, public domain, CC BY, CC BY-SA |
+| Incompetech (`incompetech.com`, Kevin MacLeod) | music | CC BY 4.0 |
+| Kenney (`kenney.nl`) | sound packs | CC0 (the page is checked before download) |
+| Freesound (`freesound.org`, with the user's key) | sound effects (HQ previews) | CC0, CC BY |
+| NASA Image and Video Library (`images-api.nasa.gov`) | footage, photos | US public domain (NASA media guidelines; partner credit kept) |
+| Wikimedia Commons (`commons.wikimedia.org`) | footage | CC0, public domain, CC BY, CC BY-SA |
+| Pexels (`api.pexels.com`, with the user's key) | footage, photos | Pexels License |
+| Pixabay (`pixabay.com/api`, with the user's key) | footage, photos, illustrations | Pixabay Content License |
+| Noto Emoji (`fonts.gstatic.com/s/e/notoemoji`), OpenMoji fallback | emoji stickers | CC BY 4.0 / CC BY-SA 4.0 |
+| Google Fonts (`fonts.google.com` / `fonts.gstatic.com`) | fonts, with their licence text | SIL OFL, Apache-2.0, UFL |
+
+Generated colour looks (`studio.look`) are written as `.cube` files to `<data dir>/studio/looks/`;
+they are original work computed by `crates/engine/src/studio_fx.rs`.
 
 ### Speech models
 

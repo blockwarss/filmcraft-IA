@@ -87,30 +87,46 @@ channel. Each edit is one undo step.
 
 | Command | What it does |
 |---|---|
-| `studio.sfx.list` / `studio.sfx.add` | ~60 built-in sound effects, synthesised from scratch: transitions (whoosh, swish, whip, riser, downlifter, glitch, tape stop, rewind…), impacts (bass boom, cinematic impact, sub drop, 808, dramatic sting…), UI (pop, ding, notification, typing, countdown…), meme (record scratch, boing, rimshot, sad trombone, air horn, crickets…), game (coin, level up, power up, explosion, XP pickup, block break / place, bow, sword, portal…). `variant` gives other takes. |
+| `studio.sfx.list` / `studio.sfx.add` | ~100 built-in sound effects, synthesised from scratch: transitions (whoosh, swish, whip, zoom in, riser, bass riser, downlifter, glitch, glitch stutter, tape stop, rewind…), impacts (bass boom, cinematic impact, braam, sub drop, 808, gong, taiko, thunder, glass break, dramatic sting…), UI (pop, bubble pop, water drop, ding, like, subscribe bell, cash register, message send, phone vibrate, camera focus, typing, countdown…), meme (record scratch, bonk, honk, boing, rimshot, sad trombone, air horn, applause, crowd cheer, kiss, magic wand, crickets…), game (coin, level up, power up, explosion, gunshot, reload, hitmarker, combo, respawn, shield, XP pickup, block break / place, bow, sword, portal…). `variant` gives other takes. |
 | `studio.music.styles` / `studio.music.generate` | Original music beds: phonk, trap, EDM, chiptune, lo-fi, chill, cinematic, at any tempo, key and length, with intro, break and drop. Returns the **exact beat grid** (beats, downbeats, drop) in sequence time. |
 | `studio.silences` / `studio.cutSilences` | Find / ripple-delete dead air in the recorded sound (jump cuts); automatic threshold between noise floor and voice. |
 | `studio.beats`, `studio.markBeats`, `studio.beatCut`, `studio.beatMontage` | Beat grid of a music clip (exact for generated music, measured otherwise), markers on beats, cuts on beats, a montage with one shot every N beats. |
 | `studio.punchZoom` / `studio.shake` | Keyframed punch-in zoom (optionally about a point) and camera shake. |
 | `studio.format` | TikTok / Reels / Shorts (1080×1920), portrait, square, YouTube 1080p / 4K, clips filling the frame. |
 | `studio.captions` | Captions from the transcript in a style: `tiktok`, `gaming`, `youtube`, `minimal`, `bold`. |
-| `studio.title` | Animated titles: `hook`, `gaming`, `meme`, `subscribe`, `lowerThird`, `neon`, `clean`; sized to fit the frame. |
+| `studio.title` | Animated titles sized to fit the frame: `hook`, `gaming`, `meme`, `subscribe`, `lowerThird`, `neon`, `clean`, TikTok's own looks (`boxed`, `boxedDark`, `highlight`, `reply` comment bubble, `part2`), `news`, `warning`, `quote`, `cinematic`, `countdown`, `pixel`, `horror`, `pastel`, `fire`. Entrances: `pop`, `bounce`, `zoom`, `slide`, `drop`, `fade`, `wipe` (typed-on reveal), `shake`, `none`. |
+| `studio.overlay` | A picture, sticker or video over the shot on its own track: named spots inside TikTok's safe zone (or `[x, y]`), width as a fraction of the frame, rotation, `pop` / `bounce` / `fade` / `slide` / `spin` entrance and a quick exit. |
+| `studio.broll` | A full-frame cut-in above the main shot for N seconds (pictures get a slow push-in; long agency footage starts at its liveliest moment, past title slates). |
+| `studio.blurFill` | Landscape footage in a vertical frame: the whole shot over a blurred, darkened, frame-filling copy of itself, instead of black bars. |
+| `studio.look` | Colour looks through Lumetri: `vibrant`, `cyberpunk`, `vaporwave`, `vintage`, `sepia`, `noir`, `dreamy`, `moody`, `sunset`, `matrix`, `cinematic` (generated `.cube` LUTs) and the built-in `teal_orange`, `warm`, `cold`, `bleach`, `faded`, `bw`, `golden`, `night`; `intensity` 0–200. |
+| `studio.fx` | Effect presets: `vhs`, `grain`, `vignette`, `letterbox`, `blur`, `pixelate`, `mirror`, `pushin`, `fadein`, `fadeout`, `blurin`, and at a moment `flash`, `glitch`, `zoompulse`. |
+| `studio.transition` | At the nearest cut: `zoom`, `whip` (wrap-around pan with motion blur, never a black frame), `flash`, `glitch`, `spin`, `shake`, each with its sound effect. `studio.fx.list` lists effects, looks, transitions, positions and animations. |
 | `studio.guide` | The **Guide** audio track (see trending sounds below); `mute: true` before export. |
 | `studio.library.list` / `.add` / `.addFolder` | Your own sounds, music and clips: `<data dir>/studio/my-library/` plus any folder you add. Search by file and folder names. |
 | `studio.fonts.install` / `studio.fonts.list` | Install a .ttf/.otf for titles and captions (kept in `<data dir>/studio/fonts/`, loaded at start-up). |
 | `studio.exportSettings` | `file.exportMedia` parameters for TikTok, Reels, Shorts, YouTube or X, with a warning when the Guide track would end up in the file. |
 
-MCP-only tools (`crates/automation`): `studio_overview` (everything above in one call),
-`library_search` / `library_download` (Openverse: CC0, public domain, CC BY, CC BY-SA — usable in
-monetised videos; the credit line comes back when one is needed), `fonts_search` /
-`fonts_install` (Google Fonts).
+MCP-only tools (`crates/automation`):
+
+| Tool | What it does |
+|---|---|
+| `studio_overview` | Everything above in one call. |
+| `library_search` | Music and sound effects: Kevin MacLeod's Incompetech catalogue (~1 500 tracks, searchable by mood, genre, BPM and length; CC BY), Openverse (Freesound, Jamendo, ccMixter, Wikimedia; CC0 / CC BY / CC BY-SA) and Freesound directly with your key. |
+| `media_search` | B-roll footage, photos, illustrations and stickers: Pexels and Pixabay (with your free keys), Openverse images, NASA, Wikimedia Commons video. Vertical (9:16) results first. |
+| `library_download` | Downloads any result with its `.attribution` file and places it: sounds on a free audio track, footage as B-roll (`as: broll`) or an overlay (`as: overlay`). Returns the credit line when one is needed. |
+| `library_packs` | Kenney's CC0 sound packs: impacts, interface, UI, retro / digital, sci-fi, RPG, casino, music jingles and announcer voices ("fight", "combo", "game over", "level up"…). Installed packs are searchable with `studio.library.list`. |
+| `sticker_add` | Emoji stickers (💀 🔥 😭 👀 🗿 🤡 💯… or names like `skull`, `fire`) with a pop entrance, placed in the safe zone. |
+| `library_keys` | Your own free Pexels / Pixabay / Freesound API keys: see which are set, store one (kept in `<data dir>/studio/api-keys.json`, owner-only on macOS / Linux) or forget it. Environment variables `PEXELS_API_KEY`, `PIXABAY_API_KEY`, `FREESOUND_API_KEY` work too. |
+| `fonts_search` / `fonts_install` | Google Fonts for titles and captions. |
 
 ## Music and sounds: what is safe where
 
 | Source | Use it on | Notes |
 |---|---|---|
 | Built-in sound effects and generated music | everywhere, monetised included | original work generated on your machine; never matched by Content ID |
-| Openverse downloads | everywhere | give the credit line when `needsCredit` is true |
+| Kenney packs (CC0), Openverse / Freesound CC0, NASA | everywhere | no credit needed (NASA: "Credit: NASA" is customary; partner footage is credited) |
+| Incompetech, Openverse / Freesound CC BY, Noto / OpenMoji stickers | everywhere | put the credit line in the description (`needsCredit: true`) |
+| Pexels / Pixabay | everywhere | no credit needed; don't resell the clips as they are |
 | Your library | your responsibility | packs you bought, sounds you recorded… |
 | Trending platform sounds | in the platform's app only | FilmCraft never downloads them (their licence covers use inside the app) |
 
@@ -128,7 +144,9 @@ the trend.
 - The panel passes Claude only FilmCraft's tools and web search (`--strict-mcp-config`,
   `--allowedTools`); session ids are checked before being passed on.
 - Network access happens only when Claude (or you) asks for an online library or a font: HTTPS only,
-  size limits, file names built by FilmCraft, licences checked again on download.
+  size limits, file names built by FilmCraft, licences checked again on download. Sound packs are
+  unpacked with path, count and size limits (audio and licence files only). API keys are stored
+  owner-only, sent only to their own service and never shown back, not even in error messages.
 - Your conversations go to Claude through your own Claude Code / Claude Desktop, under your account.
 
 ## Troubleshooting

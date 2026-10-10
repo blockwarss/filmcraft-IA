@@ -24,3 +24,5 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # the same stack as the speech-model downloads.
 ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
 rustls-rustcrypto = "0.0.2-alpha"
+# Kenney's CC0 sound packs come as zip archives: deflate only (pure Rust zlib-rs backend).
+zip = { version = "7", default-features = false, features = ["deflate-flate2-zlib-rs"] }

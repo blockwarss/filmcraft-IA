@@ -21,8 +21,17 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
 - `render_preview {seconds}` — look at a frame. In bridge mode `ui_screenshot {panel: "Timeline"}`
   shows the timeline. **Look after every significant step**; never claim a result you haven't
   checked.
-- `library_search` / `library_download` — openly licensed music and SFX online (CC0 / CC BY).
+- `library_search` — music (Kevin MacLeod's Incompetech catalogue by mood / BPM, Openverse) and
+  sound effects (Openverse, Freesound with the user's key). `library_packs` — Kenney's CC0 packs
+  (impacts, UI, retro, sci-fi, jingles, announcer voices "fight", "combo", "game over"…).
+- `media_search` — B-roll footage, photos and stickers (Pexels / Pixabay with the user's free key,
+  Openverse, NASA, Wikimedia), vertical first. `library_download {id, seconds, as}` places any
+  result (sound → audio track, footage → `broll` or `overlay`).
+- `sticker_add {emoji}` — emoji stickers (💀 🔥 😭 👀 🗿…) that pop in.
+- `library_keys` — which free API keys are set; store one the user gives you.
 - `fonts_search` / `fonts_install` — Google Fonts for titles and captions.
+- `command_run {id: "studio.fx.list"}` — effect presets, colour looks, transitions, overlay
+  positions and animations.
 - Undo: `command_run {id: "edit.undo"}`. Every studio recipe is one undo step.
 
 ## 1. The loop
@@ -43,10 +52,20 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
 
 ## 2. Short-form (TikTok / Reels / Shorts)
 
-- `studio.format {preset: "tiktok"}` first (1080×1920, clips fill the frame).
+- `studio.format {preset: "tiktok"}` first (1080×1920, clips fill the frame). Landscape footage
+  where the whole frame matters (gameplay HUD, wide shots): `studio.blurFill` instead of cropping —
+  the shot stays whole over a blurred copy of itself.
 - **Hook in the first 1–2 s**: start on the most surprising/funny/impressive moment (cold open),
   big text with `studio.title {style: "hook"}` saying *why to keep watching* ("I found diamonds
   at Y=-59 in 2 minutes"). Never start with an intro, a logo or "hey guys".
+- **Pattern interrupts**: every 2–3 s something changes — a cut, `studio.punchZoom`, a title, a
+  sticker (`sticker_add`), B-roll (`media_search` → `library_download {as: "broll"}`), a
+  transition at a cut (`studio.transition {style: "zoom" | "whip" | "flash" | "glitch"}`, sound
+  included). Vary them; don't repeat the same trick three times in a row.
+- **Reply-to-comment videos**: open with `studio.title {style: "reply", text: "Reply to @name's
+  comment\n<the comment>"}` at the top; series: `studio.title {style: "part2", text: "PART 2"}`.
+- **Look**: one colour look for the whole video (`studio.look {look: "vibrant", all: true}`;
+  `cinematic`, `vintage`, `moody`, `cyberpunk`… to match the vibe) — never a different look per clip.
 - **Pace**: no shot longer than ~3 s without a change (cut, zoom, text, B-roll). Remove every
   breath gap: `studio.cutSilences {minSeconds: 0.35, padSeconds: 0.08}` for talking, 0.5 / 0.12
   for gameplay commentary.
@@ -90,7 +109,12 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
 
 ## 5. Sound design rules
 
-- `studio.sfx.list` shows ~60 original sounds (free to use anywhere). Use `variant` 1, 2, 3… when
+- `studio.sfx.list` shows ~100 original sounds (free to use anywhere): `pop` / `bubble_pop` for
+  text and stickers, `whoosh` / `zoom_in` / `whip` for transitions, `boom` / `braam` / `bass_808`
+  for reveals, `bonk` / `honk` / `record_scratch` / `sad_trombone` for comedy, `like` /
+  `subscribe_bell` / `message_send` / `cash_register` for UI moments, `hitmarker` / `gunshot` /
+  `reload` / `combo` / `level_up` for games. More: `library_packs {install: "impact-sounds"}`,
+  `"voiceover-pack-fighter"` (announcer "fight!", "combo!"), then `studio.library.add {query}`. Use `variant` 1, 2, 3… when
   the same sound repeats so it doesn't sound copy-pasted.
 - Place SFX **slightly before** the visual (1–2 frames) for impacts; whooshes start ~0.2 s before
   the cut so the peak lands on it.
@@ -106,8 +130,10 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
    `bpm`/`key` to taste.
 2. **The user's library** (`studio.library.list {query}` / `studio.library.add`): their own packs
    and tracks. Their responsibility for rights.
-3. **Online openly licensed** (`library_search {kind: "music"}` → `library_download`): CC0 / CC BY.
-   When `needsCredit` is true, give the user the `attribution` line for the description.
+3. **Online openly licensed** (`library_search {kind: "music", query: "<mood>", min_bpm, max_bpm}`
+   → `library_download`): Incompetech (Kevin MacLeod, CC BY, searchable by mood, genre and BPM)
+   and Openverse (CC0 / CC BY). When `needsCredit` is true, give the user the `attribution` line
+   for the description (TikTok caption or YouTube description).
 4. **Trending platform sounds** (TikTok etc.): never download them. Workflow: the user puts the
    sound file they have in their library (or skips it), you place it with
    `studio.library.add {…, guide: true}` → it lands on the **Guide** track; cut to its beats
@@ -117,8 +143,14 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
 
 ## 7. Text & fonts
 
-- Titles: `studio.title {text, style}` — `hook`, `gaming`, `meme`, `subscribe`, `lowerThird`,
-  `neon`, `clean`; they pop in (scale keyframes). Max ~6 words on screen; UPPERCASE for hooks.
+- Titles: `studio.title {text, style, animate}` — `hook`, `gaming`, `meme`, `subscribe`,
+  `lowerThird`, `neon`, `clean`, TikTok-native `boxed` / `boxedDark` / `highlight`, `reply`
+  (comment bubble), `part2`, `news`, `warning`, `quote`, `cinematic`, `countdown`, `pixel`,
+  `horror`, `pastel`, `fire`. Entrances: `pop` (default), `bounce`, `zoom`, `slide`, `drop`,
+  `fade`, `wipe` (typed-on), `shake`. Max ~6 words on screen; UPPERCASE for hooks.
+- Stickers and pictures: `sticker_add {emoji, seconds, position}` or `studio.overlay {path,
+  position, width, animate}`; positions are inside the safe zone (`top-right`, `bottom-left`…).
+  Pair each with a `pop` sound; 1–2 s on screen.
 - Fonts: `fonts_search {query: "gaming"}`, `fonts_install {family: "Bebas Neue"}`, then pass
   `font` to `studio.title` / `studio.captions`. Good defaults: Montserrat (captions), Bebas Neue /
   Anton (hooks), Bangers / Luckiest Guy (funny gaming), Pixelify Sans (block games).
@@ -129,6 +161,7 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
 - [ ] Every cut is intentional; no flash frames (1-frame leftovers) — check `doc_inspect` for
       clips shorter than 3 frames and remove them.
 - [ ] Captions readable, inside safe zones, no typos.
+- [ ] Every downloaded asset with `needsCredit: true` has its credit line ready for the user.
 - [ ] Audio: no clipping, voice clear over music, music fades/ends cleanly.
 - [ ] Guide track muted (if any). Export at the platform settings; `burnCaptions: true` for
       short-form.

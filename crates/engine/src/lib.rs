@@ -47,6 +47,7 @@ pub mod shortcut_presets;
 pub mod shortcuts;
 pub mod source_monitor;
 pub mod studio;
+pub mod studio_fx;
 pub mod sync;
 pub mod transcript;
 pub mod trim;

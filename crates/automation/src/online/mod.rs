@@ -1,12 +1,19 @@
-//! Online libraries for agents: openly licensed music and sound effects (Openverse: Freesound,
-//! Jamendo, Wikimedia Commons, ccMixter…) and Google Fonts.
+//! Online libraries for agents, all free to use in monetised videos (TikTok, YouTube…):
+//!
+//! - audio: Openverse (Freesound, Jamendo, Wikimedia Commons, ccMixter…), Kevin MacLeod's
+//!   Incompetech catalogue ([`incompetech`]), Kenney's CC0 sound packs ([`packs`]) and, with the
+//!   user's free key, Freesound directly ([`visual`] holds the keyed providers);
+//! - pictures and footage: Openverse images, NASA, Wikimedia Commons video and, with the user's
+//!   free keys, Pexels and Pixabay ([`visual`]);
+//! - emoji stickers: Noto Emoji ([`sticker`]);
+//! - fonts: Google Fonts.
 //!
 //! Only licences that allow use in any video, including monetised ones, are searched or accepted:
-//! CC0, public domain (PDM), CC BY and CC BY-SA. Every download is saved with an `.attribution`
-//! sidecar holding the credit line, which the tool result also returns so it can go in the video
-//! description. Responses are treated as hostile: HTTPS only, sizes capped, file names built from
-//! sanitised ids (never from the server's paths), and font files only from the Google Fonts
-//! repository on GitHub.
+//! CC0, public domain, CC BY and CC BY-SA, plus the Pexels and Pixabay licences. Every download is
+//! saved with an `.attribution` sidecar holding the credit line, which the tool result also
+//! returns so it can go in the video description. Responses are treated as hostile: HTTPS only,
+//! sizes capped, file names built from sanitised ids (never from the server's paths), archives
+//! unpacked with path, count and size limits, API keys never echoed (see [`redact`]).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -15,15 +22,41 @@ use serde_json::{Value, json};
 
 use crate::AutomationError;
 
+pub mod incompetech;
+pub mod keys;
+pub mod packs;
+pub mod sticker;
+pub mod visual;
+
 /// Licences usable in any video (monetised included).
 pub const LICENSES: &str = "cc0,pdm,by,by-sa";
 const MAX_AUDIO_BYTES: u64 = 80 << 20;
 const MAX_FONT_BYTES: u64 = 25 << 20;
 const MAX_JSON_BYTES: u64 = 8 << 20;
+/// Largest picture downloaded.
+pub const MAX_IMAGE_BYTES: u64 = 40 << 20;
+/// Largest video downloaded (stock clips are short; this still fits a 4K minute).
+pub const MAX_VIDEO_BYTES: u64 = 600 << 20;
 const USER_AGENT: &str = concat!("FilmCraft/", env!("CARGO_PKG_VERSION"), " (+https://github.com/storytold/filmcraft)");
 
 fn err(e: impl std::fmt::Display) -> AutomationError {
-    AutomationError::Other(e.to_string())
+    AutomationError::Other(redact(&e.to_string()))
+}
+
+/// `text` with the values of `key=` / `token=` / `api_key=` query parameters masked, so an API
+/// key never reaches an error message or a tool result.
+pub fn redact(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(i) = ["key=", "token="].iter().filter_map(|k| rest.find(k).map(|i| i + k.len())).min() {
+        out.push_str(&rest[..i]);
+        out.push_str("***");
+        let tail = &rest[i..];
+        let end = tail.find(|c: char| c == '&' || c == ' ' || c == '"' || c == '\'' || c.is_whitespace()).unwrap_or(tail.len());
+        rest = &tail[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 fn agent() -> ureq::Agent {
@@ -37,17 +70,22 @@ fn agent() -> ureq::Agent {
                 .build(),
         )
         .timeout_connect(Some(std::time::Duration::from_secs(20)))
-        .timeout_global(Some(std::time::Duration::from_secs(180)))
+        .timeout_global(Some(std::time::Duration::from_secs(600)))
         .https_only(true)
         .build()
         .into()
 }
 
-fn get_bytes(url: &str, cap: u64) -> Result<Vec<u8>, AutomationError> {
+/// GET `url` (HTTPS only) with extra request `headers`, refusing bodies over `cap` bytes.
+pub fn fetch(url: &str, cap: u64, headers: &[(&str, &str)]) -> Result<Vec<u8>, AutomationError> {
     if !url.starts_with("https://") {
         return Err(err(format!("refusing a non-HTTPS URL: {url}")));
     }
-    let resp = agent().get(url).header("User-Agent", USER_AGENT).call().map_err(|e| err(format!("{url}: {e}")))?;
+    let mut req = agent().get(url).header("User-Agent", USER_AGENT);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let resp = req.call().map_err(|e| err(format!("{url}: {e}")))?;
     let mut body = resp.into_body();
     let mut out = Vec::new();
     body.as_reader().take(cap + 1).read_to_end(&mut out).map_err(|e| err(format!("{url}: {e}")))?;
@@ -57,8 +95,58 @@ fn get_bytes(url: &str, cap: u64) -> Result<Vec<u8>, AutomationError> {
     Ok(out)
 }
 
+fn get_bytes(url: &str, cap: u64) -> Result<Vec<u8>, AutomationError> {
+    fetch(url, cap, &[])
+}
+
 fn get_json(url: &str) -> Result<Value, AutomationError> {
-    serde_json::from_slice(&get_bytes(url, MAX_JSON_BYTES)?).map_err(|e| err(format!("{url}: not JSON ({e})")))
+    fetch_json(url, &[])
+}
+
+/// GET a JSON document (at most 8 MB).
+pub fn fetch_json(url: &str, headers: &[(&str, &str)]) -> Result<Value, AutomationError> {
+    serde_json::from_slice(&fetch(url, MAX_JSON_BYTES, headers)?).map_err(|e| err(format!("{url}: not JSON ({e})")))
+}
+
+/// Download `url` to `dir/<stem>.<ext>` unless that file is already there (written through a
+/// `.part` file so an interrupted download never looks complete), then write the `.attribution`
+/// sidecar.
+pub fn save(url: &str, cap: u64, headers: &[(&str, &str)], dir: &Path, stem: &str, ext: &str, sidecar: &str) -> Result<PathBuf, AutomationError> {
+    std::fs::create_dir_all(dir).map_err(|e| err(format!("{}: {e}", dir.display())))?;
+    let stem = safe_name(stem);
+    let ext = safe_name(&ext.to_ascii_lowercase());
+    let path = dir.join(format!("{stem}.{ext}"));
+    if !path.exists() {
+        let bytes = fetch(url, cap, headers)?;
+        let part = dir.join(format!("{stem}.part"));
+        std::fs::write(&part, &bytes).map_err(|e| err(format!("{}: {e}", part.display())))?;
+        std::fs::rename(&part, &path).map_err(|e| err(e.to_string()))?;
+    }
+    let _ = std::fs::write(PathBuf::from(format!("{}.attribution", path.display())), sidecar);
+    Ok(path)
+}
+
+/// The text of an `.attribution` sidecar.
+pub fn sidecar(file: &Path, title: &str, author: &str, source: &str, license: &str, license_url: &str, attribution: &str) -> String {
+    let one = |s: &str| s.replace(['\n', '\r'], " ");
+    format!(
+        "asset:        {}\ntitle:        {}\nauthor:       {}\nsource:       {}\nlicense:      {}\nlicense-url:  {}\nattribution:  {}\n",
+        file.file_name().map(|n| n.to_string_lossy()).unwrap_or_default(),
+        one(title),
+        one(author),
+        one(source),
+        one(license),
+        one(license_url),
+        one(attribution)
+    )
+}
+
+/// A file name stem from a title and an id: `"Epic Boss!"`, `"a1b2c3d4e5"` → `epic-boss-a1b2c3d4`.
+pub fn stem(title: &str, id: &str) -> String {
+    let t: String = title.to_ascii_lowercase().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect();
+    let t: String = t.split('-').filter(|w| !w.is_empty()).collect::<Vec<_>>().join("-").chars().take(48).collect();
+    let id = safe_name(id);
+    format!("{}-{}", if t.is_empty() { "media" } else { t.trim_end_matches('-') }, id.chars().take(10).collect::<String>())
 }
 
 /// Percent-encode a query value.
@@ -72,6 +160,11 @@ pub fn encode(s: &str) -> String {
         .collect()
 }
 
+/// Percent-encode a URL path segment (spaces as `%20`).
+pub fn encode_path(s: &str) -> String {
+    encode(s).replace('+', "%20")
+}
+
 /// Letters, digits, `-` and `_` only (at most 80), for file names built from remote ids.
 pub fn safe_name(s: &str) -> String {
     let v: String = s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_').take(80).collect();
@@ -80,6 +173,14 @@ pub fn safe_name(s: &str) -> String {
 
 fn license_ok(l: &str) -> bool {
     matches!(l.to_ascii_lowercase().as_str(), "cc0" | "pdm" | "by" | "by-sa")
+}
+
+/// Checks a search query.
+pub fn check_query(query: &str) -> Result<(), AutomationError> {
+    if query.trim().is_empty() || query.len() > 200 {
+        return Err(err("`query` must be 1–200 characters"));
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------------------- Openverse
@@ -124,9 +225,7 @@ pub fn parse_openverse(v: &Value) -> Vec<Value> {
 }
 
 pub fn openverse_search(query: &str, kind: &str, limit: u32) -> Result<Vec<Value>, AutomationError> {
-    if query.trim().is_empty() || query.len() > 200 {
-        return Err(err("`query` must be 1–200 characters"));
-    }
+    check_query(query)?;
     let r = parse_openverse(&get_json(&openverse_url(query, kind, limit))?);
     if r.is_empty() && kind != "any" {
         // the length filter can be too strict for rare queries
@@ -142,6 +241,8 @@ pub struct Download {
     pub attribution: String,
     pub license: String,
     pub needs_credit: bool,
+    /// `audio`, `video` or `image`.
+    pub kind: String,
 }
 
 /// Download Openverse audio `id` into `dir` (reused when already there) with its sidecar.
@@ -179,7 +280,89 @@ pub fn openverse_download(id: &str, dir: &Path) -> Result<Download, AutomationEr
         r["license_url"].as_str().unwrap_or(""),
     );
     let _ = std::fs::write(PathBuf::from(format!("{}.attribution", path.display())), side);
-    Ok(Download { path, title, attribution, license: lic.to_string(), needs_credit: !matches!(lic, "cc0" | "pdm") })
+    Ok(Download { path, title, attribution, license: lic.to_string(), needs_credit: !matches!(lic, "cc0" | "pdm"), kind: "audio".into() })
+}
+
+// ------------------------------------------------------------------------------- dispatch
+
+/// Where downloads go under the studio folder: `<studio>/downloads/`.
+pub fn downloads_dir(studio: &Path) -> PathBuf {
+    studio.join("downloads")
+}
+
+/// Download any library result by id into `<studio>/downloads/…`: `km:` Incompetech, `fs:`
+/// Freesound, `ovi:` / `nasa:` / `wm:` / `px:` / `pb:` pictures and footage, `emoji:` a sticker,
+/// and a bare id for Openverse audio.
+pub fn download_any(id: &str, studio: &Path) -> Result<Download, AutomationError> {
+    let id = id.trim();
+    if id.is_empty() || id.len() > 300 {
+        return Err(err("`id` must be 1–300 characters"));
+    }
+    let dl = downloads_dir(studio);
+    match id.split_once(':') {
+        Some(("km", slug)) => incompetech::download(slug, &dl.join("audio"), &dl.join("cache")),
+        Some(("emoji", e)) => sticker::download(e, &dl.join("stickers")),
+        Some((_, _)) => visual::download(id, &dl, Some(studio)),
+        None => openverse_download(id, &dl.join("audio")),
+    }
+}
+
+/// Search music and sound effects across sources. `source`: `openverse`, `incompetech`,
+/// `freesound` or `all` (default: Incompetech + Openverse for music, Openverse + Freesound when
+/// keyed for sound effects).
+pub fn audio_search(
+    query: &str,
+    kind: &str,
+    source: &str,
+    filter: &incompetech::Filter,
+    limit: u32,
+    studio: Option<&Path>,
+) -> Result<(Vec<Value>, Vec<Value>), AutomationError> {
+    let mut results = Vec::new();
+    let mut notes = Vec::new();
+    let all = matches!(source, "" | "all");
+    if !matches!(source, "" | "all" | "openverse" | "incompetech" | "freesound") {
+        return Err(err("source: all, openverse, incompetech or freesound"));
+    }
+    if (all && kind != "sfx") || source == "incompetech" {
+        let cache = studio.map(|s| downloads_dir(s).join("cache")).unwrap_or_else(|| std::env::temp_dir().join("filmcraft-cache"));
+        match incompetech::search(query, filter, limit as usize, &cache) {
+            Ok(v) => results.extend(v),
+            Err(e) => notes.push(json!({"source": "incompetech", "error": e.to_string()})),
+        }
+    }
+    if all || source == "openverse" {
+        if query.trim().is_empty() {
+            notes.push(json!({"source": "openverse", "note": "needs a query"}));
+        } else {
+            match openverse_search(query, kind, limit) {
+                Ok(v) => results.extend(v.into_iter().map(|mut r| {
+                    r["source"] = json!("openverse");
+                    r
+                })),
+                Err(e) => notes.push(json!({"source": "openverse", "error": e.to_string()})),
+            }
+        }
+    }
+    if (all && kind != "music") || source == "freesound" {
+        match keys::get("freesound", studio) {
+            Some(k) if !query.trim().is_empty() => match visual::freesound_search(query, limit, filter.max_seconds, &k) {
+                Ok(v) => results.extend(v),
+                Err(e) => notes.push(json!({"source": "freesound", "error": e.to_string()})),
+            },
+            Some(_) => {}
+            None if source == "freesound" => {
+                return Err(err("Freesound needs your free API key: https://freesound.org/apiv2/apply then library_keys {service: \"freesound\", key}"));
+            }
+            None => notes.push(json!({"source": "freesound", "note": "add a free Freesound key (library_keys) for 600 000+ more sound effects"})),
+        }
+    }
+    if results.is_empty()
+        && let Some(e) = notes.iter().find_map(|n| n["error"].as_str())
+    {
+        return Err(err(e));
+    }
+    Ok((results, notes))
 }
 
 // ------------------------------------------------------------------------------- fonts

@@ -53,19 +53,19 @@ pub fn library_dir() -> Option<PathBuf> {
     crate::autosave::default_data_dir().map(|d| d.join("studio"))
 }
 
-fn sub_dir(name: &str) -> Result<PathBuf> {
+pub(crate) fn sub_dir(name: &str) -> Result<PathBuf> {
     let d = library_dir().ok_or_else(|| EngineError::Other("no studio folder on this platform".into()))?.join(name);
     std::fs::create_dir_all(&d).map_err(|e| EngineError::Other(format!("{}: {e}", d.display())))?;
     Ok(d)
 }
 
-fn path_str(p: &Path) -> String {
+pub(crate) fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
 // ------------------------------------------------------------------------------- helpers
 
-fn secs(t: Tick) -> f64 {
+pub(crate) fn secs(t: Tick) -> f64 {
     t.0 as f64 / TICKS_PER_SECOND as f64
 }
 
@@ -82,7 +82,7 @@ fn item_for_path(s: &Session, path: &str) -> Option<ItemId> {
 }
 
 /// Import `path` (or reuse the item that already holds it).
-fn import(s: &mut Session, path: &str) -> Result<ItemId> {
+pub(crate) fn import(s: &mut Session, path: &str) -> Result<ItemId> {
     if let Some(i) = item_for_path(s, path) {
         return Ok(i);
     }
@@ -139,7 +139,7 @@ fn exists(s: &Session, path: &Path) -> bool {
 }
 
 /// `time` / `seconds` / `frame` / `timecode`, else the playhead.
-fn at_p(s: &Session, p: &Value) -> Tick {
+pub(crate) fn at_p(s: &Session, p: &Value) -> Tick {
     time_p(s, p, "").unwrap_or(s.playhead()).max(Tick::ZERO)
 }
 
@@ -680,7 +680,7 @@ fn beat_montage(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The video clip a motion recipe acts on: `clip`, else the selected video clip under the time,
 /// else the topmost enabled video clip under it.
-fn video_clip_at(s: &Session, p: &Value, t: Tick) -> Result<ClipId> {
+pub(crate) fn video_clip_at(s: &Session, p: &Value, t: Tick) -> Result<ClipId> {
     let q = s.active_sequence().ok_or(EngineError::NoSequence)?;
     if let Some(c) = u64_p(p, "clip").map(ClipId) {
         return q.find_item(c).map(|_| c).ok_or_else(|| bad("studio", "no such clip"));
@@ -699,7 +699,7 @@ fn video_clip_at(s: &Session, p: &Value, t: Tick) -> Result<ClipId> {
 }
 
 /// Write keyframes `(sequence time, value)` on the clip's Motion `param` (one undo step).
-fn motion_keys(s: &mut Session, label: &str, c: ClipId, param: &str, keys: Vec<(Tick, ParamValue)>, smooth: bool) -> Result<usize> {
+pub(crate) fn motion_keys(s: &mut Session, label: &str, c: ClipId, param: &str, keys: Vec<(Tick, ParamValue)>, smooth: bool) -> Result<usize> {
     let n = keys.len();
     let param = param.to_string();
     s.edit_sequence(label, move |q, _, _| {
@@ -720,7 +720,7 @@ fn motion_keys(s: &mut Session, label: &str, c: ClipId, param: &str, keys: Vec<(
     Ok(n)
 }
 
-fn float_at(s: &Session, c: ClipId, param: &str, t: Tick) -> Option<ParamValue> {
+pub(crate) fn float_at(s: &Session, c: ClipId, param: &str, t: Tick) -> Option<ParamValue> {
     let q = s.active_sequence()?;
     let (_, it) = q.find_item(c)?;
     let mt = it.source_time_at(t.clamp(it.start, (it.end() - Tick(1)).max(it.start)));
@@ -889,7 +889,25 @@ const TITLE_STYLES: &[(&str, f64, &str, &str, f64, Option<&str>, bool, &str)] = 
     ("lowerthird", 0.04, "#ffffff", "#000000", 0.0, Some("#111111"), false, "bottom"),
     ("neon", 0.07, "#7df9ff", "#00b3ff", 0.03, None, true, "center"),
     ("clean", 0.05, "#ffffff", "#000000", 0.0, None, true, "center"),
+    // TikTok's own text looks
+    ("boxed", 0.045, "#000000", "#000000", 0.0, Some("#ffffff"), false, "top"),
+    ("boxeddark", 0.045, "#ffffff", "#000000", 0.0, Some("#000000b3"), false, "top"),
+    ("highlight", 0.05, "#000000", "#000000", 0.0, Some("#ffe600"), false, "top"),
+    ("reply", 0.036, "#161823", "#000000", 0.0, Some("#ffffff"), true, "top"),
+    ("part2", 0.075, "#ffffff", "#000000", 0.0, Some("#fe2c55"), true, "top"),
+    ("news", 0.042, "#ffffff", "#000000", 0.0, Some("#d00000"), true, "bottom"),
+    ("warning", 0.05, "#000000", "#000000", 0.0, Some("#ffcc00"), true, "center"),
+    ("quote", 0.048, "#ffffff", "#000000", 0.0, None, true, "center"),
+    ("cinematic", 0.04, "#f2f2f2", "#000000", 0.0, None, false, "center"),
+    ("countdown", 0.2, "#ffffff", "#000000", 0.08, None, true, "center"),
+    ("pixel", 0.05, "#39ff14", "#000000", 0.18, None, false, "top"),
+    ("horror", 0.07, "#c1121f", "#000000", 0.06, None, true, "center"),
+    ("pastel", 0.055, "#ffb3d9", "#ffffff", 0.1, None, true, "center"),
+    ("fire", 0.07, "#ffb703", "#d62828", 0.12, None, true, "center"),
 ];
+
+/// Title entrance animations.
+pub const TITLE_ANIMATIONS: &[&str] = &["pop", "bounce", "zoom", "slide", "drop", "fade", "wipe", "shake", "none"];
 
 fn title(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "studio.title";
@@ -918,7 +936,10 @@ fn title(s: &mut Session, p: &Value) -> Result<Value> {
     let dur = f64_p(p, "durationSeconds").unwrap_or(2.5).clamp(0.1, 600.0);
     let font = str_p(p, "font").map(str::to_string);
     let fill = str_p(p, "color").unwrap_or(fill).to_string();
-    let animate = str_p(p, "animate").unwrap_or("pop").to_string();
+    let animate = str_p(p, "animate").unwrap_or("pop").to_ascii_lowercase();
+    if !TITLE_ANIMATIONS.contains(&animate.as_str()) {
+        return Err(bad(CMD, format!("animate: {}", TITLE_ANIMATIONS.join(", "))));
+    }
     s.compound(&format!("Title ({id})"), |s| {
         let mut q = json!({"text": text, "size": px, "position": [x, y], "seconds": dur, "time": t.0, "newClip": true});
         if let Some(f) = &font {
@@ -948,13 +969,62 @@ fn title(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
         s.execute("graphics.set", json!({"clip": clip.0, "props": props}))?;
-        if animate == "pop" {
-            let f = Tick::from_seconds_f64;
-            let keys = vec![(t, ParamValue::Float(0.0)), (t + f(0.09), ParamValue::Float(115.0)), (t + f(0.16), ParamValue::Float(100.0))];
-            motion_keys(s, "Title", clip, "scale", keys, true)?;
-        }
+        animate_title(s, clip, t, &animate, (w, h))?;
         Ok(json!({"clip": clip.0, "style": id, "size": px, "at": secs(t), "duration": dur}))
     })
+}
+
+/// Keyframe a title's entrance (sequence time `t`, frame size `(w, h)`).
+fn animate_title(s: &mut Session, clip: ClipId, t: Tick, animate: &str, (w, h): (f64, f64)) -> Result<()> {
+    let f = Tick::from_seconds_f64;
+    let v = ParamValue::Float;
+    let at = |x: f64, y: f64| ParamValue::Vec2(filmcraft_geom::Vec2::new(x, y));
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    match animate {
+        "pop" => {
+            motion_keys(s, "Title", clip, "scale", vec![(t, v(0.0)), (t + f(0.09), v(115.0)), (t + f(0.16), v(100.0))], true)?;
+        }
+        "bounce" => {
+            motion_keys(
+                s,
+                "Title",
+                clip,
+                "scale",
+                vec![(t, v(0.0)), (t + f(0.12), v(122.0)), (t + f(0.22), v(90.0)), (t + f(0.32), v(104.0)), (t + f(0.4), v(100.0))],
+                true,
+            )?;
+        }
+        "zoom" => {
+            motion_keys(s, "Title", clip, "scale", vec![(t, v(170.0)), (t + f(0.18), v(100.0))], true)?;
+            crate::studio_fx::fx_edit(s, "Title", clip, "opacity", vec![], vec![("opacity", vec![(t, v(0.0)), (t + f(0.12), v(100.0))])])?;
+        }
+        "slide" => {
+            motion_keys(s, "Title", clip, "position", vec![(t, at(cx, cy + h * 0.08)), (t + f(0.22), at(cx, cy))], true)?;
+            crate::studio_fx::fx_edit(s, "Title", clip, "opacity", vec![], vec![("opacity", vec![(t, v(0.0)), (t + f(0.15), v(100.0))])])?;
+        }
+        "drop" => {
+            motion_keys(s, "Title", clip, "position", vec![(t, at(cx, cy - h * 0.6)), (t + f(0.2), at(cx, cy + h * 0.015)), (t + f(0.3), at(cx, cy))], true)?;
+        }
+        "fade" => {
+            crate::studio_fx::fx_edit(s, "Title", clip, "opacity", vec![], vec![("opacity", vec![(t, v(0.0)), (t + f(0.3), v(100.0))])])?;
+        }
+        "wipe" => {
+            // reveals left to right, like typing
+            crate::studio_fx::fx_edit(s, "Title", clip, "crop", vec![], vec![("right", vec![(t, v(100.0)), (t + f(0.6), v(0.0))])])?;
+        }
+        "shake" => {
+            let mut rng = synth::Rng::new(t.0.unsigned_abs() ^ 0x5eed);
+            let mut keys = vec![(t, at(cx, cy))];
+            for i in 1..8 {
+                let k = 1.0 - f64::from(i) / 8.0;
+                keys.push((t + f(f64::from(i) * 0.04), at(cx + f64::from(rng.bipolar()) * w * 0.02 * k, cy + f64::from(rng.bipolar()) * h * 0.01 * k)));
+            }
+            keys.push((t + f(0.34), at(cx, cy)));
+            motion_keys(s, "Title", clip, "position", keys, false)?;
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 // ------------------------------------------------------------------------------- guide track
@@ -1021,6 +1091,10 @@ fn library_config() -> Option<PathBuf> {
 fn library_folders() -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(d) = sub_dir("my-library") {
+        v.push(d);
+    }
+    // online downloads and installed sound packs (library_download, library_packs)
+    if let Some(d) = library_dir().map(|d| d.join("downloads")).filter(|d| d.is_dir()) {
         v.push(d);
     }
     if let Some(cfg) = library_config().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice::<Value>(&b).ok()) {
@@ -1096,7 +1170,26 @@ fn library_list(_s: &mut Session, p: &Value) -> Result<Value> {
                 continue;
             }
             let w = words(&f, root);
-            let score = query.iter().filter(|q| w.iter().any(|x| x.contains(q.as_str()))).count();
+            // the file's own name counts more than its folders (a pack folder named "fighter"
+            // must not make every sound in it match "fight" equally)
+            let stem: Vec<String> = f
+                .file_stem()
+                .map(|n| n.to_string_lossy().split(|c: char| !c.is_alphanumeric()).filter(|x| !x.is_empty()).map(str::to_lowercase).collect())
+                .unwrap_or_default();
+            let score: usize = query
+                .iter()
+                .map(|q| {
+                    if stem.iter().any(|x| x == q) {
+                        4
+                    } else if stem.iter().any(|x| x.contains(q.as_str())) {
+                        3
+                    } else if w.iter().any(|x| x.contains(q.as_str())) {
+                        1
+                    } else {
+                        0
+                    }
+                })
+                .sum();
             if !query.is_empty() && score == 0 {
                 continue;
             }
@@ -1394,7 +1487,7 @@ pub(crate) fn commands() -> Vec<CommandSpec> {
         spec!(
             "studio.title",
             "Styled Title",
-            r##"{"text":str,"style":"hook|gaming|meme|subscribe|lowerThird|neon|clean"="hook","time"|"seconds"?,"durationSeconds":2.5,"position":"top|center|bottom"?,"font":str?,"color":"#rrggbb"?,"sizeScale":1,"animate":"pop|none"="pop"}"##,
+            r##"{"text":str,"style":"hook|gaming|meme|subscribe|lowerThird|neon|clean|boxed|boxedDark|highlight|reply|part2|news|warning|quote|cinematic|countdown|pixel|horror|pastel|fire"="hook","time"|"seconds"?,"durationSeconds":2.5,"position":"top|center|bottom"?,"font":str?,"color":"#rrggbb"?,"sizeScale":1,"animate":"pop|bounce|zoom|slide|drop|fade|wipe|shake|none"="pop"}"##,
             has_seq,
             title,
             true

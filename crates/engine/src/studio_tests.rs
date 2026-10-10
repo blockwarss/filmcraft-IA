@@ -277,6 +277,26 @@ fn titles_pop_in() {
 }
 
 #[test]
+fn every_title_style_and_animation_works() {
+    let mut s = demo();
+    s.execute("studio.format", json!({"preset": "tiktok"})).unwrap();
+    for (style, ..) in TITLE_STYLES {
+        let r = s.execute("studio.title", json!({"text": "Reply to @maya's comment\nhow did you do that??", "style": style, "seconds": 0.2}));
+        assert!(r.is_ok(), "{style}: {r:?}");
+    }
+    for a in TITLE_ANIMATIONS {
+        let undo = s.history.undo.len();
+        let r = s.execute("studio.title", json!({"text": "PART 2", "style": "part2", "animate": a, "seconds": 1.0})).unwrap();
+        assert_eq!(s.history.undo.len(), undo + 1, "{a}");
+        let c = filmcraft_project::ClipId(r["clip"].as_u64().unwrap());
+        let (_, it) = s.active_sequence().unwrap().find_item(c).unwrap();
+        let keyed = it.effects.iter().any(|e| e.params.values().any(|p| !p.keyframes.is_empty()));
+        assert_eq!(keyed, *a != "none", "{a}");
+    }
+    assert!(s.execute("studio.title", json!({"text": "x", "animate": "explode"})).is_err());
+}
+
+#[test]
 fn a_failing_recipe_changes_nothing() {
     let mut s = demo();
     let (project, undo) = (s.project.clone(), s.history.undo.len());
@@ -296,6 +316,12 @@ fn library_folders_are_searched_and_placed() {
     let src = wav("bruh-tmp.wav", &[(0.3, true)]);
     std::fs::copy(&src, dir.join("vine boom loud.wav")).unwrap();
     std::fs::write(dir.join("notes.txt"), "not media").unwrap();
+    // a folder name matching the query must not outrank the file that is named after it
+    let fighter = lib().join("packs-test").join("voiceover-fighter");
+    std::fs::create_dir_all(&fighter).unwrap();
+    for n in ["1.wav", "combo.wav", "fight.wav"] {
+        std::fs::copy(&src, fighter.join(n)).unwrap();
+    }
     let mut s = demo();
     s.execute("studio.library.addFolder", json!({"path": lib().join("packs-test").to_string_lossy()})).unwrap();
     let l = s.execute("studio.library.list", json!({"query": "vine boom"})).unwrap();
@@ -303,6 +329,8 @@ fn library_folders_are_searched_and_placed() {
     assert_eq!(files.len(), 1, "{l}");
     assert_eq!(files[0]["kind"], "audio");
     assert!(files[0]["tags"].as_array().unwrap().contains(&json!("meme")));
+    let f = s.execute("studio.library.list", json!({"query": "fight"})).unwrap();
+    assert!(f["files"][0]["path"].as_str().unwrap().ends_with("fight.wav"), "{f}");
     let before = audio_clips(&s);
     s.execute("studio.library.add", json!({"query": "boom", "seconds": 2})).unwrap();
     assert_eq!(audio_clips(&s), before + 1);
