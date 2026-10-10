@@ -23,11 +23,16 @@ There are three ways to talk to Claude. Use whichever you like; they all drive t
 3. Type what you want, or click a quick action (*Make it a TikTok*, *Gaming montage*, *Cut silences*,
    *Add captions*, *Add music*, *Review my edit*). Enter sends, Shift+Enter adds a line, **New Chat**
    starts over, **Stop** interrupts.
+4. **Model** and **Effort** (above the quick actions) choose how Claude works on the next message:
+   *Opus* for a whole edit, *Sonnet* fast and capable, *Haiku* quickest for small requests; a higher
+   effort thinks longer before editing (better on big edits, slower, and it uses your plan's limits
+   faster). *Default* keeps Claude Code's own setting. The choice is remembered and the
+   conversation carries on.
 
 The panel runs `claude -p` with FilmCraft's MCP server bridged to the window (see
 `apps/filmcraft/src/claude_host.rs`). Claude may only use FilmCraft's tools and web search there.
 The **Desktop** checkbox keeps FilmCraft listening for Claude Desktop / Claude Code whenever it is
-open (stored in `<data dir>/claude.json`).
+open (stored in `<data dir>/claude.json`, with the model and effort).
 
 ### Claude Desktop
 
@@ -143,7 +148,8 @@ the trend.
   (so a web page can't send it commands), and has no password: it is on only when you start
   FilmCraft for Claude or tick **Desktop** (`docs/control-protocol.md`).
 - The panel passes Claude only FilmCraft's tools and web search (`--strict-mcp-config`,
-  `--allowedTools`); session ids are checked before being passed on.
+  `--allowedTools`); session ids are checked before being passed on, and the model and effort are
+  passed only when they are one of the panel's choices (`--model`, `--effort`).
 - Network access happens only when Claude (or you) asks for an online library or a font: HTTPS only,
   size limits, file names built by FilmCraft, licences checked again on download. Sound packs are
   unpacked with path, count and size limits (audio and licence files only). API keys are stored

@@ -9,7 +9,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use filmcraft_ui_egui::panels::claude::{ClaudeEvent, ClaudeHost};
+use filmcraft_ui_egui::panels::claude::{ClaudeEvent, ClaudeHost, ClaudeOptions};
 use serde_json::{Value, json};
 
 /// What Claude is told about where it runs (added to Claude Code's own system prompt).
@@ -82,7 +82,7 @@ fn work_dir() -> PathBuf {
 }
 
 /// Arguments of one `claude -p` run (the message itself goes to stdin).
-pub fn claude_args(cli: &Path, port: u16, session: Option<&str>) -> Vec<String> {
+pub fn claude_args(cli: &Path, port: u16, session: Option<&str>, opts: &ClaudeOptions) -> Vec<String> {
     let mcp = json!({"mcpServers": {"filmcraft": {"command": cli.to_string_lossy(), "args": ["mcp", "--bridge", format!("127.0.0.1:{port}")]}}});
     let mut a: Vec<String> = vec![
         "-p".into(),
@@ -98,6 +98,16 @@ pub fn claude_args(cli: &Path, port: u16, session: Option<&str>) -> Vec<String> 
         "--append-system-prompt".into(),
         SYSTEM.into(),
     ];
+    // the panel's model and effort, revalidated: only the values it offers reach Claude Code
+    let opts = ClaudeOptions::new(opts.model.as_deref().unwrap_or(""), opts.effort.as_deref().unwrap_or(""));
+    if let Some(m) = opts.model {
+        a.push("--model".into());
+        a.push(m);
+    }
+    if let Some(e) = opts.effort {
+        a.push("--effort".into());
+        a.push(e);
+    }
     // a session id is a UUID: never something that could read as an option
     if let Some(s) = session.filter(|s| (8..=64).contains(&s.len()) && !s.starts_with('-') && s.chars().all(|c| c.is_ascii_hexdigit() || c == '-')) {
         a.push("--resume".into());
@@ -266,14 +276,14 @@ impl ClaudeHost for ClaudeCode {
         Ok(v)
     }
 
-    fn send(&mut self, text: &str, session: Option<&str>, port: u16) -> Result<(), String> {
+    fn send(&mut self, text: &str, session: Option<&str>, port: u16, opts: &ClaudeOptions) -> Result<(), String> {
         if self.child.is_some() && self.rx.is_some() {
             return Err("Claude is still working on the previous message".into());
         }
         let claude = find_claude().ok_or("Claude Code is not installed (claude.com/code)")?;
         let cli = find_cli().ok_or("filmcraft-cli was not found next to FilmCraft")?;
         let mut child = Command::new(&claude)
-            .args(claude_args(&cli, port, session))
+            .args(claude_args(&cli, port, session, opts))
             .current_dir(work_dir())
             .env("PATH", child_path())
             .stdin(Stdio::piped())
@@ -373,14 +383,20 @@ mod tests {
 
     #[test]
     fn arguments_bridge_the_window_and_resume_safely() {
-        let a = claude_args(Path::new("/x/filmcraft-cli"), 9876, Some("5f1c9a2e-77d0-4b1e"));
+        let a = claude_args(Path::new("/x/filmcraft-cli"), 9876, Some("5f1c9a2e-77d0-4b1e"), &ClaudeOptions::default());
         let mcp: Value = serde_json::from_str(&a[a.iter().position(|x| x == "--mcp-config").unwrap() + 1]).unwrap();
         assert_eq!(mcp["mcpServers"]["filmcraft"]["args"], json!(["mcp", "--bridge", "127.0.0.1:9876"]));
         assert_eq!(a.last().map(String::as_str), Some("5f1c9a2e-77d0-4b1e"));
         // a session id that isn't one is never passed on
         for bad in ["--dangerously-skip-permissions", "-p", "abc", "deadbeef; rm -rf /", ""] {
-            assert!(!claude_args(Path::new("/x"), 1, Some(bad)).iter().any(|x| x == "--resume"), "{bad}");
+            assert!(!claude_args(Path::new("/x"), 1, Some(bad), &ClaudeOptions::default()).iter().any(|x| x == "--resume"), "{bad}");
         }
         assert!(a.contains(&"--strict-mcp-config".to_string()) && !a.iter().any(|x| x.contains("dangerously")));
+        // the default model and effort: no flags; a choice: the flags, a forged value: dropped
+        assert!(!a.iter().any(|x| x == "--model" || x == "--effort"));
+        let chosen = claude_args(Path::new("/x"), 1, None, &ClaudeOptions { model: Some("opus".into()), effort: Some("max".into()) });
+        assert!(chosen.windows(2).any(|w| w == ["--model", "opus"]) && chosen.windows(2).any(|w| w == ["--effort", "max"]), "{chosen:?}");
+        let forged = claude_args(Path::new("/x"), 1, None, &ClaudeOptions { model: Some("--dangerously-skip-permissions".into()), effort: Some("-p".into()) });
+        assert!(!forged.iter().any(|x| x == "--model" || x == "--effort" || x.contains("dangerously")), "{forged:?}");
     }
 }

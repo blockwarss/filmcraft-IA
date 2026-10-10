@@ -119,7 +119,12 @@ pub fn install_desktop(exe: &Path, port: u16, dry_run: bool) -> Result<String, S
 /// Make the desktop app open its control port for Claude whenever it starts (so Claude reaches a
 /// FilmCraft the user opened by hand instead of starting a second one).
 pub fn listen(port: u16) -> Result<(), String> {
-    filmcraft_engine::studio::save_claude_settings(&filmcraft_engine::studio::ClaudeSettings { listen: true, port }).map(|_| ())
+    filmcraft_engine::studio::save_claude_settings(&filmcraft_engine::studio::ClaudeSettings {
+        listen: true,
+        port,
+        ..filmcraft_engine::studio::claude_settings()
+    })
+    .map(|_| ())
 }
 
 pub fn uninstall_desktop() -> Result<String, String> {

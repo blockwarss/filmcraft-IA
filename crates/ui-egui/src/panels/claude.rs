@@ -7,7 +7,8 @@
 //! Desktop or Claude Code instead.
 //!
 //! Automation ids: `claude.input`, `claude.send`, `claude.stop`, `claude.new`, `claude.retry`,
-//! `claude.listen`, `claude.quick.<id>`, `claude.item.<n>`.
+//! `claude.listen`, `claude.quick.<id>`, `claude.item.<n>`, `claude.model` (options
+//! `claude.model.option.<alias>`, `default`), `claude.effort` (`claude.effort.option.<level>`).
 
 use egui::{Align2, Color32, Key, KeyboardShortcut, Modifiers, Rect, RichText, Sense, Stroke, pos2, vec2};
 
@@ -32,13 +33,35 @@ pub enum ClaudeEvent {
     Done { error: Option<String> },
 }
 
+/// Models the panel offers: (Claude Code `--model` alias, label); `""` is Claude Code's default.
+pub const MODELS: &[(&str, &str)] = &[("", "Default"), ("opus", "Opus"), ("sonnet", "Sonnet"), ("haiku", "Haiku")];
+
+/// Effort levels the panel offers: (Claude Code `--effort` level, label); `""` is the default.
+pub const EFFORTS: &[(&str, &str)] = &[("", "Default"), ("low", "Low"), ("medium", "Medium"), ("high", "High"), ("xhigh", "Extra High"), ("max", "Max")];
+
+/// How Claude runs a turn: the model and effort chosen in the panel (`None`: Claude Code's own).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClaudeOptions {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl ClaudeOptions {
+    /// Only values the panel offers come through (anything else, say from an edited settings
+    /// file, means the default): nothing else is ever passed to Claude Code.
+    pub fn new(model: &str, effort: &str) -> Self {
+        let pick = |list: &[(&str, &str)], v: &str| list.iter().find(|(id, _)| !id.is_empty() && *id == v).map(|(id, _)| (*id).to_string());
+        ClaudeOptions { model: pick(MODELS, model), effort: pick(EFFORTS, effort) }
+    }
+}
+
 /// Runs Claude for the panel.
 pub trait ClaudeHost {
     /// `Ok(version)` when Claude Code is installed, else what to do about it.
     fn check(&mut self) -> Result<String, String>;
     /// Start a turn: `text` in the conversation `session` (a new one when `None`), with
-    /// FilmCraft's MCP server bridged to `port`.
-    fn send(&mut self, text: &str, session: Option<&str>, port: u16) -> Result<(), String>;
+    /// FilmCraft's MCP server bridged to `port`, on the model and effort of `opts`.
+    fn send(&mut self, text: &str, session: Option<&str>, port: u16, opts: &ClaudeOptions) -> Result<(), String>;
     /// Events since the last poll.
     fn poll(&mut self) -> Vec<ClaudeEvent>;
     /// Stop the running turn.
@@ -68,6 +91,36 @@ pub struct ChatState {
     pub port: u16,
     /// `claude.json`'s `listen`, read once.
     pub listen: Option<bool>,
+    /// The model and effort for the next message (`claude.json`'s, read once: see [`prefs`]).
+    pub options: Option<(String, String)>,
+}
+
+/// The chosen (model, effort), loaded from `claude.json` the first time.
+pub fn prefs(app: &mut FilmcraftApp) -> (String, String) {
+    app.claude
+        .options
+        .get_or_insert_with(|| {
+            let c = filmcraft_engine::studio::claude_settings();
+            let o = ClaudeOptions::new(&c.model, &c.effort);
+            (o.model.unwrap_or_default(), o.effort.unwrap_or_default())
+        })
+        .clone()
+}
+
+/// Choose the model and effort for the next messages (unknown values mean the default) and
+/// remember them in `claude.json`.
+pub fn set_prefs(app: &mut FilmcraftApp, model: &str, effort: &str) {
+    let o = ClaudeOptions::new(model, effort);
+    let (model, effort) = (o.model.unwrap_or_default(), o.effort.unwrap_or_default());
+    app.claude.options = Some((model.clone(), effort.clone()));
+    let saved = filmcraft_engine::studio::save_claude_settings(&filmcraft_engine::studio::ClaudeSettings {
+        model,
+        effort,
+        ..filmcraft_engine::studio::claude_settings()
+    });
+    if let Err(e) = saved {
+        app.claude.items.push(ChatItem::Error(e));
+    }
 }
 
 /// One-click requests: (id, button label, request sent to Claude).
@@ -128,12 +181,14 @@ pub fn send(app: &mut FilmcraftApp, text: &str, quick: bool) {
     let lang = reply_language(app);
     let ask = if quick { format!("{text}\n\nReply in {lang}.") } else { text.clone() };
     let session = app.claude.session.clone();
+    let (model, effort) = prefs(app);
+    let opts = ClaudeOptions::new(&model, &effort);
     let Some(host) = app.hooks.claude.as_mut() else {
         app.claude.items.push(ChatItem::Error(tl!("Claude is not available in this version of FilmCraft.").into()));
         return;
     };
     app.claude.items.push(ChatItem::User(text));
-    match host.send(&ask, session.as_deref(), port) {
+    match host.send(&ask, session.as_deref(), port, &opts) {
         Ok(()) => app.claude.busy = true,
         Err(e) => app.claude.items.push(ChatItem::Error(e)),
     }
@@ -227,6 +282,8 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     let mut stop = false;
     let mut recheck = false;
     let mut listen_toggle: Option<bool> = None;
+    let (mut model, mut effort) = prefs(app);
+    let chosen = (model.clone(), effort.clone());
 
     // header: status + New chat
     ui.horizontal(|ui| {
@@ -253,6 +310,38 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             recheck = r.clicked();
         });
     }
+    // model and effort for the next message
+    ui.add_enabled_ui(app.hooks.claude.is_some(), |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let label = |list: &[(&str, &str)], v: &str| crate::i18n::t(list.iter().find(|(id, _)| *id == v).map_or("Default", |(_, l)| *l)).to_string();
+            ui.label(RichText::new(tl!("Model")).color(t.text_dim).size(11.5));
+            let shown = label(MODELS, &model);
+            let r = egui::ComboBox::from_id_salt("claude.model").selected_text(&shown).width(92.0).show_ui(ui, |ui| {
+                for (id, l) in MODELS {
+                    let o = ui.selectable_value(&mut model, (*id).to_string(), crate::i18n::t(l));
+                    elems.push((format!("claude.model.option.{}", if id.is_empty() { "default" } else { id }), o.rect, (*l).into()));
+                }
+            });
+            r.response
+                .clone()
+                .on_hover_text(tl!("Opus: the most capable, best for a whole edit. Sonnet: fast and capable. Haiku: quickest, for small requests."));
+            elems.push(("claude.model".into(), r.response.rect, shown));
+            ui.add_space(6.0);
+            ui.label(RichText::new(tl!("Effort")).color(t.text_dim).size(11.5));
+            let shown = label(EFFORTS, &effort);
+            let r = egui::ComboBox::from_id_salt("claude.effort").selected_text(&shown).width(92.0).show_ui(ui, |ui| {
+                for (id, l) in EFFORTS {
+                    let o = ui.selectable_value(&mut effort, (*id).to_string(), crate::i18n::t(l));
+                    elems.push((format!("claude.effort.option.{}", if id.is_empty() { "default" } else { id }), o.rect, (*l).into()));
+                }
+            });
+            r.response.clone().on_hover_text(tl!(
+                "Higher effort: Claude thinks longer before editing. Better results on big edits, but slower, and it uses your plan's limits faster."
+            ));
+            elems.push(("claude.effort".into(), r.response.rect, shown));
+        });
+    });
     ui.add_space(4.0);
 
     // quick actions
@@ -386,6 +475,9 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     for (id, r, l) in elems {
         app.auto.add(&id, r, &l);
     }
+    if (model.clone(), effort.clone()) != chosen {
+        set_prefs(app, &model, &effort);
+    }
     if recheck {
         app.claude.checked = app.hooks.claude.as_mut().map(|h| h.check());
     }
@@ -399,7 +491,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     if let Some(on) = listen_toggle {
         app.claude.listen = Some(on);
         let port = ensure_listening(app);
-        let saved = filmcraft_engine::studio::save_claude_settings(&filmcraft_engine::studio::ClaudeSettings { listen: on, port });
+        let saved = filmcraft_engine::studio::save_claude_settings(&filmcraft_engine::studio::ClaudeSettings {
+            listen: on,
+            port,
+            ..filmcraft_engine::studio::claude_settings()
+        });
         if let Err(e) = saved {
             app.claude.items.push(ChatItem::Error(e));
         }
@@ -419,7 +515,7 @@ mod tests {
 
     /// A host that records what it was asked and replays scripted events.
     struct Fake {
-        sent: Arc<Mutex<Vec<(String, Option<String>, u16)>>>,
+        sent: Arc<Mutex<Vec<(String, Option<String>, u16, ClaudeOptions)>>>,
         events: Vec<ClaudeEvent>,
     }
 
@@ -427,8 +523,8 @@ mod tests {
         fn check(&mut self) -> Result<String, String> {
             Ok("2.1.0".into())
         }
-        fn send(&mut self, text: &str, session: Option<&str>, port: u16) -> Result<(), String> {
-            self.sent.lock().unwrap().push((text.into(), session.map(str::to_string), port));
+        fn send(&mut self, text: &str, session: Option<&str>, port: u16, opts: &ClaudeOptions) -> Result<(), String> {
+            self.sent.lock().unwrap().push((text.into(), session.map(str::to_string), port, opts.clone()));
             Ok(())
         }
         fn poll(&mut self) -> Vec<ClaudeEvent> {
@@ -453,6 +549,7 @@ mod tests {
             ],
         }));
         app.claude.port = 9999;
+        app.claude.options = Some((String::new(), String::new()));
         send(&mut app, "  cut the silences ", false);
         assert!(app.claude.busy);
         pump(&mut app, &egui::Context::default());
@@ -470,9 +567,25 @@ mod tests {
         // the next message continues the conversation; quick requests ask for a reply language
         send(&mut app, QUICK[2].2, true);
         let s = sent.lock().unwrap();
-        assert_eq!(s[0], ("cut the silences".into(), None, 9999));
+        assert_eq!(s[0], ("cut the silences".into(), None, 9999, ClaudeOptions::default()));
         assert_eq!(s[1].1.as_deref(), Some("abc"));
         assert!(s[1].0.contains("Reply in"), "{}", s[1].0);
+    }
+
+    #[test]
+    fn the_chosen_model_and_effort_go_with_the_message() {
+        let mut app = FilmcraftApp::new(filmcraft_engine::Session::default());
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        app.hooks.claude = Some(Box::new(Fake { sent: sent.clone(), events: vec![] }));
+        app.claude.port = 9999;
+        app.claude.options = Some(("opus".into(), "xhigh".into()));
+        send(&mut app, "make it a TikTok", false);
+        let s = sent.lock().unwrap();
+        assert_eq!(s[0].3, ClaudeOptions { model: Some("opus".into()), effort: Some("xhigh".into()) });
+        // only what the panel offers: anything else (an edited settings file) is the default
+        assert_eq!(ClaudeOptions::new("--dangerously-skip-permissions", "ultra"), ClaudeOptions::default());
+        assert_eq!(ClaudeOptions::new("", ""), ClaudeOptions::default());
+        assert!(MODELS.iter().chain(EFFORTS).all(|(id, _)| !id.starts_with('-') && id.chars().all(|c| c.is_ascii_lowercase())));
     }
 
     #[test]

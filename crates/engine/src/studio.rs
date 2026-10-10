@@ -1355,11 +1355,15 @@ pub const CLAUDE_PORT: u16 = 9876;
 pub struct ClaudeSettings {
     pub listen: bool,
     pub port: u16,
+    /// The Claude panel's model (a Claude Code `--model` alias; empty: Claude Code's default).
+    pub model: String,
+    /// The Claude panel's effort level (`--effort`; empty: the default).
+    pub effort: String,
 }
 
 impl Default for ClaudeSettings {
     fn default() -> Self {
-        ClaudeSettings { listen: false, port: CLAUDE_PORT }
+        ClaudeSettings { listen: false, port: CLAUDE_PORT, model: String::new(), effort: String::new() }
     }
 }
 
