@@ -141,6 +141,8 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |cc| {
             let mut session = Session::default();
+            // fonts installed with studio.fonts.install (Claude, the Studio commands)
+            filmcraft_engine::studio::register_user_fonts();
             if let Some(dir) = data_dir.clone().or_else(default_data_dir) {
                 let mut cfg = AutosaveConfig::new(dir);
                 cfg.local_offset = local_offset;

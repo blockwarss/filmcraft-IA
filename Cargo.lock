@@ -1730,11 +1730,13 @@ dependencies = [
  "filmcraft-time",
  "image",
  "rmcp",
+ "rustls-rustcrypto",
  "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
+ "ureq",
 ]
 
 [[package]]

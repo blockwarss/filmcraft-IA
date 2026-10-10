@@ -154,6 +154,49 @@ pub struct ControlParams {
     pub params: Option<Value>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LibrarySearchParams {
+    /// What to look for, e.g. `epic orchestral`, `whoosh`, `minecraft cave ambience`, `lofi beat`.
+    pub query: String,
+    /// `music` (tracks), `sfx` (short sounds) or `any` (default).
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Results to return (1–50, default 12).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LibraryDownloadParams {
+    /// Result `id` from `library_search`.
+    pub id: String,
+    /// Place it on the timeline (default true); false only imports it into the project.
+    #[serde(default)]
+    pub place: Option<bool>,
+    /// Timeline time in seconds (default: the playhead).
+    #[serde(default)]
+    pub seconds: Option<f64>,
+    /// Audio track (`"A3"` or an id); default: a free one.
+    #[serde(default)]
+    pub track: Option<Value>,
+    /// Clip gain in dB (e.g. -10 for a music bed under voice).
+    #[serde(default)]
+    pub gain_db: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct FontSearchParams {
+    /// Name or use, e.g. `pixel`, `gaming`, `caption`, `horror`; empty lists all suggestions.
+    #[serde(default)]
+    pub query: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FontInstallParams {
+    /// Google Fonts family name, e.g. `Bebas Neue`, `Montserrat`, `Press Start 2P`.
+    pub family: String,
+}
+
 fn ok_json(v: &Value) -> CallToolResult {
     CallToolResult::success(vec![Content::text(serde_json::to_string_pretty(v).unwrap_or_default())])
 }
@@ -175,7 +218,12 @@ impl FilmcraftMcp {
         Self { backend: Arc::new(Backend::Headless(Arc::new(Mutex::new(session)))), tool_router: Self::tool_router() }
     }
     pub fn bridge(addr: &str) -> Result<Self, AutomationError> {
-        Ok(Self { backend: Arc::new(Backend::Bridge(Arc::new(BridgeClient::new(addr)?))), tool_router: Self::tool_router() })
+        Self::with_bridge(BridgeClient::new(addr)?)
+    }
+    /// Bridge mode over a configured client (e.g. one that launches the app,
+    /// [`BridgeClient::with_launch`]).
+    pub fn with_bridge(client: BridgeClient) -> Result<Self, AutomationError> {
+        Ok(Self { backend: Arc::new(Backend::Bridge(Arc::new(client))), tool_router: Self::tool_router() })
     }
 
     pub async fn serve_stdio(self) -> Result<(), AutomationError> {
@@ -517,6 +565,154 @@ impl FilmcraftMcp {
     }
 
     #[tool(
+        title = "Studio overview",
+        description = "Start here: the editing recipes (studio.* commands: sound effects, generated music, silence cuts, beat sync, punch zooms, vertical format, styled captions and titles, guide track, user library, fonts, export settings), the sound-effect catalogue, music styles and the editor playbook in short. Run recipes with command_run.",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn studio_overview(&self) -> Result<CallToolResult, McpError> {
+        let commands = self.run("command.list", json!({})).await.map(|v| {
+            Value::Array(
+                v.as_array()
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|c| {
+                        c["id"].as_str().is_some_and(|i| {
+                            i.starts_with("studio.")
+                                || matches!(
+                                    i,
+                                    "transcript.generate"
+                                        | "transcript.removeFillers"
+                                        | "essentialSound.generateDucking"
+                                        | "clip.speedDuration"
+                                        | "file.exportMedia"
+                                )
+                        })
+                    })
+                    .map(|c| json!({"id": c["id"], "label": c["label"], "params": c["params"]}))
+                    .collect(),
+            )
+        });
+        let sfx = self.run("studio.sfx.list", json!({})).await;
+        let music = self.run("studio.music.styles", json!({})).await;
+        let r = match (commands, sfx, music) {
+            (Ok(c), Ok(x), Ok(m)) => {
+                let mut by_cat = serde_json::Map::new();
+                for s in x["sounds"].as_array().into_iter().flatten() {
+                    let cat = s["category"].as_str().unwrap_or("other").to_string();
+                    if let Some(a) = by_cat.entry(cat).or_insert_with(|| json!([])).as_array_mut() {
+                        a.push(s["id"].clone());
+                    }
+                }
+                Ok(json!({
+                    "recipes": c,
+                    "soundEffects": by_cat,
+                    "musicStyles": m["styles"],
+                    "online": "library_search / library_download: CC0 and CC BY music and sound effects; fonts_search / fonts_install: Google Fonts",
+                    "playbook": "read the resource filmcraft://guide for the full editor playbook",
+                    "essentials": [
+                        "Look at the result (render_preview / ui_screenshot) after every significant step.",
+                        "Short-form: studio.format {preset: tiktok} → hook title in the first 2 s → studio.cutSilences → studio.captions → SFX on every highlight → studio.exportSettings.",
+                        "Gaming: phonk/trap bed, cut on beats, punch zoom + boom on kills, shake + explosion on blasts, one strong accent per moment.",
+                        "Trending sounds are never downloaded: put the user's file on the Guide track (studio.library.add {guide: true}), cut to it, mute it before export (studio.guide {mute: true}).",
+                        "Every studio recipe is one undo step (edit.undo).",
+                    ],
+                }))
+            }
+            (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => Err(e),
+        };
+        wrap(r)
+    }
+
+    #[tool(
+        title = "Search free music & sounds online",
+        description = "Search openly licensed audio (Openverse: Freesound, Wikimedia Commons, ccMixter…). Only CC0, public domain, CC BY and CC BY-SA, all usable in monetised videos. kind: music | sfx | any. Results carry id, title, creator, licence, duration, tags and the attribution line (needsCredit tells whether it must be credited).",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn library_search(&self, Parameters(p): Parameters<LibrarySearchParams>) -> Result<CallToolResult, McpError> {
+        let kind = p.kind.unwrap_or_else(|| "any".into());
+        let limit = p.limit.unwrap_or(12);
+        let r = tokio::task::spawn_blocking(move || crate::online::openverse_search(&p.query, &kind, limit)).await.unwrap_or_else(|e| Err(join_error(e)));
+        wrap(r.map(|v| json!({"results": v, "next": "library_download {id} downloads, imports and places one"})))
+    }
+
+    #[tool(
+        title = "Download free music / sound",
+        description = "Download a library_search result into the studio folder (with an .attribution sidecar), import it and place it on a free audio track at `seconds` (default: the playhead). Returns the clip and the credit line to put in the video description when needsCredit is true.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = false, open_world_hint = true)
+    )]
+    async fn library_download(&self, Parameters(p): Parameters<LibraryDownloadParams>) -> Result<CallToolResult, McpError> {
+        let Some(dir) = filmcraft_engine::studio::library_dir() else {
+            return Ok(fail("no studio folder on this platform"));
+        };
+        let id = p.id.clone();
+        let d = match tokio::task::spawn_blocking(move || crate::online::openverse_download(&id, &dir.join("downloads").join("audio")))
+            .await
+            .unwrap_or_else(|e| Err(join_error(e)))
+        {
+            Ok(d) => d,
+            Err(e) => return Ok(fail(e)),
+        };
+        let path = d.path.to_string_lossy().into_owned();
+        let placed = if p.place.unwrap_or(true) {
+            let mut q = json!({"path": path, "gainDb": p.gain_db.unwrap_or(0.0)});
+            if let Some(sec) = p.seconds {
+                q["seconds"] = json!(sec);
+            }
+            if let Some(t) = p.track {
+                q["track"] = t;
+            }
+            self.run("studio.library.add", q).await
+        } else {
+            self.run("file.import", json!({"paths": [path]})).await
+        };
+        wrap(
+            placed.map(
+                |r| json!({"result": r, "path": path, "title": d.title, "license": d.license, "needsCredit": d.needs_credit, "attribution": d.attribution}),
+            ),
+        )
+    }
+
+    #[tool(
+        title = "Suggest fonts",
+        description = "Font suggestions for video titles and captions (gaming, pixel, comic, condensed hooks, handwriting…), all free Google Fonts. Install one with fonts_install.",
+        annotations(read_only_hint = true, destructive_hint = false, idempotent_hint = true, open_world_hint = false)
+    )]
+    async fn fonts_search(&self, Parameters(p): Parameters<FontSearchParams>) -> Result<CallToolResult, McpError> {
+        let installed = self.run("studio.fonts.list", json!({})).await.ok();
+        wrap(Ok(
+            json!({"suggestions": crate::online::font_search(p.query.as_deref().unwrap_or("")), "installed": installed.map(|v| v["installed"].clone()), "tip": "any Google Fonts family name works with fonts_install"}),
+        ))
+    }
+
+    #[tool(
+        title = "Install a Google Font",
+        description = "Download a Google Fonts family (its Regular/Bold/Black… styles and licence) and install it for titles and captions in FilmCraft. Then pass `font` to studio.title / studio.captions or graphics.set.",
+        annotations(read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = true)
+    )]
+    async fn fonts_install(&self, Parameters(p): Parameters<FontInstallParams>) -> Result<CallToolResult, McpError> {
+        let Some(dir) = filmcraft_engine::studio::library_dir() else {
+            return Ok(fail("no studio folder on this platform"));
+        };
+        let family = p.family.clone();
+        let files = match tokio::task::spawn_blocking(move || crate::online::google_font(&family, &dir.join("downloads").join("fonts")))
+            .await
+            .unwrap_or_else(|e| Err(join_error(e)))
+        {
+            Ok(f) => f,
+            Err(e) => return Ok(fail(e)),
+        };
+        let mut installed = Vec::new();
+        for f in &files {
+            match self.run("studio.fonts.install", json!({"path": f.to_string_lossy()})).await {
+                Ok(v) => installed.extend(v["installed"].as_array().cloned().unwrap_or_default()),
+                Err(e) => return Ok(fail(e)),
+            }
+        }
+        wrap(Ok(json!({"family": p.family, "installed": installed, "licence": "SIL Open Font License (free for videos)"})))
+    }
+
+    #[tool(
         title = "Live app: control-channel call",
         description = "Live app: call any control-channel method directly (ui.set, ui.scroll, ui.timeline.hit, ui.timeline.locate, ui.playback, ui.panel.show, ui.menu.list, …).",
         annotations(read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false)
@@ -561,11 +757,18 @@ impl FilmcraftMcp {
     }
 }
 
-const INSTRUCTIONS: &str = "FilmCraft video editor (Premiere Pro-class). Every edit is an engine command: `command_list` to discover ids/params, `command_run` to execute (undoable; `command_batch` runs several). `doc_inspect` (or `project_inspect`/`sequence_inspect`) returns ids you can pass to commands; `render_preview` shows the result. In bridge mode the `ui_*` tools drive the live app: `ui_elements` lists clickable ids, `ui_click`/`ui_drag`/`ui_key` operate it, `ui_screenshot` shows it. Time is in ticks: 254016000000 per second (commands also accept `seconds`, `frame` or `timecode`).";
+const INSTRUCTIONS: &str = "FilmCraft video editor (Premiere Pro-class). You are the editor: call `studio_overview` first and read the resource `filmcraft://guide` (the professional editing playbook for TikTok/Reels/Shorts, YouTube and gaming edits). High-level recipes are the `studio.*` commands (sound effects, generated music with exact beats, silence cuts, beat sync, punch zooms, vertical format, styled captions and titles); `library_search`/`library_download` fetch CC0/CC BY music and sounds, `fonts_install` Google Fonts. Every edit is an engine command: `command_list` to discover ids/params, `command_run` to execute (undoable; `command_batch` runs several). `doc_inspect` (or `project_inspect`/`sequence_inspect`) returns ids you can pass to commands; `render_preview` shows the result. In bridge mode the `ui_*` tools drive the live app: `ui_elements` lists clickable ids, `ui_click`/`ui_drag`/`ui_key` operate it, `ui_screenshot` shows it. Time is in ticks: 254016000000 per second (commands also accept `seconds`, `frame` or `timecode`).";
 
 /// Resources: the project (as `doc_inspect`) and the command catalog (as `command_list`).
 const DOCUMENT_URI: &str = "filmcraft://document";
 const COMMANDS_URI: &str = "filmcraft://commands";
+const GUIDE_URI: &str = "filmcraft://guide";
+
+/// The editor playbook, shared with the Claude Code plugin's skill (without its front matter).
+pub fn guide() -> &'static str {
+    const RAW: &str = include_str!("../../../plugins/filmcraft/skills/filmcraft-editor/SKILL.md");
+    RAW.strip_prefix("---").and_then(|r| r.split_once("\n---")).map(|(_, body)| body.trim_start()).unwrap_or(RAW)
+}
 
 /// MCP 2026-07-28 clients (current Claude Code) require `ttlMs` and `cacheScope` on list and read
 /// results; rmcp fills `resultType` and leaves the cache hints to the server, as the generated
@@ -577,7 +780,7 @@ fn cache_hints(context: &rmcp::service::RequestContext<rmcp::RoleServer>, ttl_ms
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for FilmcraftMcp {
     fn get_info(&self) -> rmcp::model::ServerConfig {
-        rmcp::model::ServerConfig::new(rmcp::model::ServerCapabilities::builder().enable_tools().enable_resources().build())
+        rmcp::model::ServerConfig::new(rmcp::model::ServerCapabilities::builder().enable_tools().enable_resources().enable_prompts().build())
             .with_server_info(rmcp::model::Implementation::new("filmcraft", env!("CARGO_PKG_VERSION")))
             .with_instructions(INSTRUCTIONS.to_string())
     }
@@ -606,6 +809,28 @@ impl ServerHandler for FilmcraftMcp {
         self.tool_router.call(tcc).await
     }
 
+    async fn list_prompts(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListPromptsResult, McpError> {
+        let mut r = rmcp::model::ListPromptsResult::with_all_items(crate::prompts::list());
+        if let Some((ttl, scope)) = cache_hints(&context, 600_000) {
+            r = r.with_ttl_ms(ttl).with_cache_scope(scope);
+        }
+        Ok(r)
+    }
+
+    async fn get_prompt(
+        &self,
+        request: rmcp::model::GetPromptRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::GetPromptResponse, McpError> {
+        crate::prompts::get(&request.name, request.arguments.as_ref())
+            .map(Into::into)
+            .ok_or_else(|| McpError::invalid_params(format!("unknown prompt `{}`", request.name), None))
+    }
+
     async fn list_resources(
         &self,
         _request: Option<rmcp::model::PaginatedRequestParams>,
@@ -621,6 +846,12 @@ impl ServerHandler for FilmcraftMcp {
                 .with_title("Command catalog")
                 .with_description("Every command with id, label, menu path, shortcut, params and enabled state (same as command_list).")
                 .with_mime_type("application/json"),
+            Resource::new(GUIDE_URI, "guide")
+                .with_title("Editor playbook")
+                .with_description(
+                    "How to edit like a professional in FilmCraft: short-form, gaming, YouTube, sound design, captions, music sources, export checklist.",
+                )
+                .with_mime_type("text/markdown"),
         ]);
         if let Some((ttl, scope)) = cache_hints(&context, 600_000) {
             r = r.with_ttl_ms(ttl).with_cache_scope(scope);
@@ -633,6 +864,13 @@ impl ServerHandler for FilmcraftMcp {
         request: rmcp::model::ReadResourceRequestParams,
         context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::model::ReadResourceResponse, McpError> {
+        if request.uri == GUIDE_URI {
+            let mut r = rmcp::model::ReadResourceResult::new(vec![rmcp::model::ResourceContents::text(guide(), request.uri).with_mime_type("text/markdown")]);
+            if let Some((ttl, scope)) = cache_hints(&context, 600_000) {
+                r = r.with_ttl_ms(ttl).with_cache_scope(scope);
+            }
+            return Ok(r.into());
+        }
         let v = match request.uri.as_str() {
             DOCUMENT_URI => self.document().await,
             COMMANDS_URI => self.run("command.list", json!({})).await,
@@ -739,7 +977,21 @@ mod tests {
             }
         }
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
-        for want in ["command_list", "command_run", "command_batch", "doc_inspect", "render_preview", "project_inspect", "render_frame", "ui_click"] {
+        for want in [
+            "command_list",
+            "command_run",
+            "command_batch",
+            "doc_inspect",
+            "render_preview",
+            "project_inspect",
+            "render_frame",
+            "ui_click",
+            "studio_overview",
+            "library_search",
+            "library_download",
+            "fonts_search",
+            "fonts_install",
+        ] {
             assert!(names.contains(&want), "{want} not listed");
         }
         let ro = |n: &str| tools.iter().find(|t| t["name"] == n).map(|t| t["annotations"]["readOnlyHint"].clone());
@@ -792,7 +1044,7 @@ mod tests {
         assert!(init["result"]["instructions"].as_str().unwrap().contains("doc_inspect"), "{init}");
         let r = c.ask(json!({"jsonrpc":"2.0","id":1,"method":"resources/list"})).await;
         let uris: Vec<&str> = r["result"]["resources"].as_array().unwrap().iter().filter_map(|x| x["uri"].as_str()).collect();
-        assert_eq!(uris, [DOCUMENT_URI, COMMANDS_URI], "{r}");
+        assert_eq!(uris, [DOCUMENT_URI, COMMANDS_URI, GUIDE_URI], "{r}");
         let r = c.ask(json!({"jsonrpc":"2.0","id":2,"method":"resources/read","params":{"uri":DOCUMENT_URI}})).await;
         assert_eq!(r["result"]["contents"][0]["mimeType"], "application/json", "{r}");
         let v: Value = serde_json::from_str(r["result"]["contents"][0]["text"].as_str().unwrap()).unwrap();
@@ -801,6 +1053,37 @@ mod tests {
         assert!(r["result"]["contents"][0]["text"].as_str().unwrap().contains("timeline.razor"), "{r}");
         let r = c.ask(json!({"jsonrpc":"2.0","id":4,"method":"resources/read","params":{"uri":"filmcraft://nope"}})).await;
         assert!(r["error"]["code"].is_i64(), "{r}");
+    }
+
+    /// The editor playbook is a resource, the editing jobs are prompts, and the studio overview
+    /// lists the recipes and the sound catalogue.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn guide_prompts_and_studio_overview() {
+        let mut c = Client::start(demo());
+        let init = c.init().await;
+        assert!(init["result"]["capabilities"]["prompts"].is_object(), "{init}");
+        assert!(init["result"]["instructions"].as_str().unwrap().contains("studio_overview"));
+        let r = c.ask(json!({"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":GUIDE_URI}})).await;
+        let md = r["result"]["contents"][0]["text"].as_str().unwrap();
+        assert!(md.starts_with("# FilmCraft editor playbook") && !md.contains("description:"), "{md:.200}");
+        let r = c.ask(json!({"jsonrpc":"2.0","id":2,"method":"prompts/list"})).await;
+        let names: Vec<&str> = r["result"]["prompts"].as_array().unwrap().iter().filter_map(|p| p["name"].as_str()).collect();
+        assert!(names.contains(&"tiktok_edit") && names.contains(&"gaming_montage") && names.contains(&"review_edit"), "{r}");
+        let r = c.ask(json!({"jsonrpc":"2.0","id":3,"method":"prompts/get","params":{"name":"gaming_montage","arguments":{"game":"Minecraft"}}})).await;
+        let text = r["result"]["messages"][0]["content"]["text"].as_str().unwrap();
+        assert!(text.contains("Minecraft") && text.contains("studio.music.generate"), "{text}");
+        let r = c.ask(json!({"jsonrpc":"2.0","id":4,"method":"prompts/get","params":{"name":"nope"}})).await;
+        assert!(r["error"].is_object(), "{r}");
+        let r = c.call(5, "studio_overview", json!({})).await;
+        let v: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert!(v["soundEffects"]["game"].as_array().unwrap().contains(&json!("level_up")), "{v}");
+        assert!(v["recipes"].as_array().unwrap().iter().any(|c| c["id"] == "studio.cutSilences"));
+        assert_eq!(v["musicStyles"][0]["id"], "phonk");
+        let r = c.call(6, "fonts_search", json!({"query": "pixel"})).await;
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("Press Start 2P"), "{r}");
+        // strict arguments apply to the new tools too
+        let r = c.call(7, "library_search", json!({"query": "x", "licence": "all"})).await;
+        assert_eq!(r["error"]["code"], -32602, "{r}");
     }
 
     /// MCP 2026-07-28 clients (current Claude Code) negotiate per request and reject list and read

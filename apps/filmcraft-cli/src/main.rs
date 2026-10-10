@@ -31,6 +31,7 @@ macro_rules! out {
 }
 
 mod args;
+mod claude;
 mod probe;
 
 use args::{Args, parse_value};
@@ -91,7 +92,13 @@ SUBCOMMANDS
                                 media info as JSON, with MXF / Ogg / BWF details; with
                                 --image-sequence <media> is the first numbered still of a sequence
   bench-decode <media> [--frames N]
-  mcp                           MCP server on stdio (headless, or --bridge to the live app)
+  mcp                           MCP server on stdio (headless, or --bridge to the live app;
+                                with --launch the app is started when it isn't running)
+  claude install [--desktop] [--code] [--port N] [--dry-run]
+                                connect FilmCraft to Claude Desktop and/or Claude Code (both by
+                                default) so Claude edits with your Claude subscription
+  claude uninstall | status | config
+                                remove it / show what is set up / print the MCP configuration
   help                          this text
   --version                     print the version
 
@@ -101,6 +108,9 @@ OPTIONS
   --save                        save the project back to --project when done
   --save-as <p.fcproj>          save the project to this path when done
   --bridge <127.0.0.1:PORT>     send commands to the running app (`filmcraft --control PORT`)
+  --launch                      `mcp --bridge`: start the desktop app when nothing answers
+  --app <path>                  the desktop app for --launch (default: found next to this
+                                program, in the usual install folders or on PATH)
   --data-dir <dir>              FilmCraft data directory for user export presets (headless;
                                 default: the app's data directory)
   --keep-going                  `run`: report failing lines and continue
@@ -140,6 +150,8 @@ impl Backend {
             return Backend::Bridge(BridgeClient::new(addr).unwrap_or_else(|e| usage(e)));
         }
         let mut s = Session::default();
+        // fonts installed with studio.fonts.install
+        filmcraft_engine::studio::register_user_fonts();
         // user export presets (and other per-user libraries) from the data directory
         if let Some(dir) = a.opt("--data-dir").map(std::path::PathBuf::from).or_else(filmcraft_engine::autosave::default_data_dir) {
             s.export_presets.set_dir(&dir);
@@ -420,9 +432,20 @@ async fn cli() {
             std::fs::write(out, png).unwrap_or_else(|e| fail(format!("{out}: {e}")));
             eprintln!("rendered {}x{} in {:.1} ms → {out}", img.w, img.h, dt.as_secs_f64() * 1000.0);
         }
+        "claude" => claude_cmd(&a),
         "mcp" => {
-            let server = match a.opt("--bridge") {
-                Some(addr) => filmcraft_automation::FilmcraftMcp::bridge(addr).unwrap_or_else(|e| fail(e)),
+            let bridge = a.opt("--bridge").map(str::to_string).or_else(|| a.flag("--launch").then(|| format!("127.0.0.1:{}", claude::DEFAULT_PORT)));
+            let server = match bridge {
+                Some(addr) => {
+                    let mut client = BridgeClient::new(addr).unwrap_or_else(|e| fail(e));
+                    if a.flag("--launch") {
+                        match a.opt("--app").map(std::path::PathBuf::from).or_else(claude::find_app) {
+                            Some(app) => client = client.with_launch(app),
+                            None => eprintln!("filmcraft-cli: --launch: the FilmCraft app was not found (pass --app <path>); open it yourself"),
+                        }
+                    }
+                    filmcraft_automation::FilmcraftMcp::with_bridge(client).unwrap_or_else(|e| fail(e))
+                }
                 None => match Backend::open(&a) {
                     Backend::Local(s) => filmcraft_automation::FilmcraftMcp::headless(*s),
                     Backend::Bridge(_) => usage("mcp: use --bridge ADDR to drive a running app"),
@@ -433,6 +456,54 @@ async fn cli() {
             }
         }
         other => usage(format!("unknown subcommand `{other}`")),
+    }
+}
+
+/// `filmcraft-cli claude install | uninstall | status | config`.
+fn claude_cmd(a: &Args) {
+    let port: u16 = a.opt("--port").map(|p| p.parse().unwrap_or_else(|_| usage("--port needs a port number"))).unwrap_or(claude::DEFAULT_PORT);
+    let exe = std::env::current_exe().unwrap_or_else(|e| fail(format!("cannot locate filmcraft-cli itself: {e}")));
+    let (desktop, code) = match (a.flag("--desktop"), a.flag("--code")) {
+        (false, false) => (true, true),
+        both => both,
+    };
+    let dry = a.flag("--dry-run");
+    let report = |r: Result<String, String>, ok: &mut bool| match r {
+        Ok(m) => outln!("{m}"),
+        Err(e) => {
+            *ok = false;
+            eprintln!("filmcraft-cli: {e}");
+        }
+    };
+    match a.pos(1).unwrap_or("install") {
+        "install" => {
+            let mut ok = true;
+            if desktop {
+                report(claude::install_desktop(&exe, port, dry), &mut ok);
+            }
+            if code {
+                report(claude::install_code(&exe, port, dry), &mut ok);
+            }
+            if claude::find_app().is_none() {
+                outln!("note: the FilmCraft desktop app was not found next to filmcraft-cli; Claude will ask you to open it (or set FILMCRAFT_APP)");
+            }
+            outln!("Then ask Claude: « Monte mes clips en TikTok gaming » / \"Edit my clips into a TikTok\" — no API key needed, it runs on your Claude plan.");
+            if !ok {
+                std::process::exit(1);
+            }
+        }
+        "uninstall" => {
+            let mut ok = true;
+            if desktop {
+                report(claude::uninstall_desktop(), &mut ok);
+            }
+            if code {
+                report(claude::uninstall_code(), &mut ok);
+            }
+        }
+        "status" => print(a, &claude::status(port)),
+        "config" => print(a, &json!({"mcpServers": {claude::SERVER: {"command": exe.to_string_lossy(), "args": claude::server_args(port)}}})),
+        other => usage(format!("claude {other}: use install, uninstall, status or config")),
     }
 }
 

@@ -19,6 +19,8 @@ const VALUED: &[&str] = &[
     "--end",
     "--data-dir",
     "--settings",
+    "--app",
+    "--port",
 ];
 
 #[derive(Debug, Default)]

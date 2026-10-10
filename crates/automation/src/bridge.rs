@@ -1,6 +1,6 @@
 //! Client for the desktop app's JSON-lines control protocol. One connection, reconnect on failure.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -19,7 +19,13 @@ pub struct BridgeClient {
     addr: String,
     conn: Mutex<Option<Conn>>,
     next_id: AtomicU64,
+    /// The desktop app to start (with `--control <port>`) when nothing answers on `addr`.
+    launch: Option<std::path::PathBuf>,
+    launched: AtomicBool,
 }
+
+/// How long a launched app gets to open its control port.
+const LAUNCH_WAIT: Duration = Duration::from_secs(45);
 
 impl BridgeClient {
     /// `addr` such as `127.0.0.1:9876` (loopback only).
@@ -29,7 +35,46 @@ impl BridgeClient {
         if !matches!(host, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
             return Err(AutomationError::BadRequest(format!("bridge address must be loopback, got `{addr}`")));
         }
-        Ok(Self { addr, conn: Mutex::new(None), next_id: AtomicU64::new(1) })
+        Ok(Self { addr, conn: Mutex::new(None), next_id: AtomicU64::new(1), launch: None, launched: AtomicBool::new(false) })
+    }
+
+    /// Start `app` (the FilmCraft desktop executable) with `--control <port>` the first time
+    /// nothing answers, then wait for it: agents can then "just connect" without the user
+    /// starting the app by hand. The app's output goes nowhere, so it can never mix with an MCP
+    /// stdio stream.
+    pub fn with_launch(mut self, app: std::path::PathBuf) -> Self {
+        self.launch = Some(app);
+        self
+    }
+
+    async fn connect(&self) -> Result<TcpStream, AutomationError> {
+        let once = || async { tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr)).await };
+        let first = match once().await {
+            Ok(Ok(s)) => return Ok(s),
+            Ok(Err(e)) => e.to_string(),
+            Err(_) => format!("timed out connecting to {}", self.addr),
+        };
+        let Some(app) = &self.launch else {
+            return Err(AutomationError::Bridge(format!("cannot connect to {} ({first}); start the app with `filmcraft --control <port>`", self.addr)));
+        };
+        if !self.launched.swap(true, Ordering::SeqCst) {
+            let port = self.addr.rsplit_once(':').map(|(_, p)| p).unwrap_or("9876");
+            std::process::Command::new(app)
+                .args(["--control", port])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .map_err(|e| AutomationError::Bridge(format!("FilmCraft is not running and could not be started ({}: {e})", app.display())))?;
+        }
+        let t0 = std::time::Instant::now();
+        while t0.elapsed() < LAUNCH_WAIT {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            if let Ok(Ok(s)) = once().await {
+                return Ok(s);
+            }
+        }
+        Err(AutomationError::Bridge(format!("started {} but it did not open {} within {} s", app.display(), self.addr, LAUNCH_WAIT.as_secs())))
     }
 
     /// Run engine command `id` in the app. A blocking export (`file.exportMedia` with
@@ -71,10 +116,7 @@ impl BridgeClient {
         let mut guard = self.conn.lock().await;
         for attempt in 0..2 {
             if guard.is_none() {
-                let s = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&self.addr))
-                    .await
-                    .map_err(|_| AutomationError::Bridge(format!("timed out connecting to {}", self.addr)))?
-                    .map_err(|e| AutomationError::Bridge(format!("cannot connect to {} ({e}); start the app with `filmcraft --control <port>`", self.addr)))?;
+                let s = self.connect().await?;
                 let (r, w) = s.into_split();
                 *guard = Some((BufReader::new(r), w));
             }
@@ -117,6 +159,20 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tokio::net::TcpListener;
+
+    /// `--launch`: an app that cannot be started is a clear error (not a hang); a running app is
+    /// used as is, without starting another.
+    #[tokio::test]
+    async fn launch_only_when_nothing_answers() {
+        let free = TcpListener::bind("127.0.0.1:0").await.unwrap().local_addr().unwrap().to_string();
+        let c = BridgeClient::new(free).unwrap().with_launch("/no/such/filmcraft-app".into());
+        let e = c.call("ui.inspect", json!({})).await.unwrap_err().to_string();
+        assert!(e.contains("could not be started") && e.contains("/no/such/filmcraft-app"), "{e}");
+        let (addr, _) = fake_app(json!({})).await;
+        let c = BridgeClient::new(addr).unwrap().with_launch("/no/such/filmcraft-app".into());
+        assert!(c.call("engine.execute", json!({"command": "file.exportMedia", "params": {}})).await.is_ok());
+        assert!(!c.launched.load(Ordering::SeqCst));
+    }
 
     /// A stand-in for the app's control server: the export starts job 7, which `jobs.list` reports
     /// running twice and then finished with `result`. Every request is recorded.

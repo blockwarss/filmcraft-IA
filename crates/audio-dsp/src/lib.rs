@@ -26,11 +26,14 @@ pub mod ducking;
 pub mod effects;
 pub mod fft;
 pub mod loudness;
+pub mod music;
 pub mod oversample;
 pub mod remix;
 pub mod resample;
+pub mod sfx;
 mod smooth;
 pub mod sync;
+pub mod synth;
 
 pub use effects::{Category, EffectInfo, create_effect, effect_info, effects};
 pub use loudness::{LoudnessMeter, normalize_gain_db};

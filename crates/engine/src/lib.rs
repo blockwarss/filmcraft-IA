@@ -46,6 +46,7 @@ pub mod settings;
 pub mod shortcut_presets;
 pub mod shortcuts;
 pub mod source_monitor;
+pub mod studio;
 pub mod sync;
 pub mod transcript;
 pub mod trim;
@@ -759,6 +760,42 @@ impl Session {
         self.state = st;
         self.bump();
         Ok(r)
+    }
+
+    /// Run several commands as one undo step named `label` (the recipes in [`studio`] are built
+    /// this way). Atomic: when `f` fails, the project, the editor state and the history are put
+    /// back as they were and the error is returned.
+    pub fn compound<R>(&mut self, label: &str, f: impl FnOnce(&mut Session) -> Result<R>) -> Result<R> {
+        let before = self.project.clone();
+        let state = self.state.clone();
+        let redo = self.history.redo.clone();
+        // the first edit inside `f` pushes `before`; everything pushed after it folds into it
+        let first = |s: &Session| s.history.undo.iter().rposition(|(_, p)| Arc::ptr_eq(p, &before));
+        let r = f(self);
+        match r {
+            Ok(v) => {
+                if let Some(i) = first(self) {
+                    self.history.undo.truncate(i + 1);
+                    if let Some(e) = self.history.undo.get_mut(i) {
+                        e.0 = label.to_string();
+                    }
+                    self.history.merge_key = None;
+                }
+                Ok(v)
+            }
+            Err(e) => {
+                if let Some(i) = first(self) {
+                    self.history.undo.truncate(i);
+                }
+                if !Arc::ptr_eq(&self.project, &before) {
+                    self.project = before;
+                    self.history.redo = redo;
+                    self.bump();
+                }
+                self.state = state;
+                Err(e)
+            }
+        }
     }
 
     /// Like [`Session::edit`], but consecutive calls with the same `key` (and no other edit in

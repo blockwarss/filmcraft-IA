@@ -12,6 +12,8 @@
 
 pub mod bridge;
 pub mod long_job;
+pub mod online;
+pub mod prompts;
 pub mod server;
 
 pub use bridge::BridgeClient;

@@ -20,3 +20,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "syn
 base64 = "0.22"
 schemars = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Online libraries (Openverse audio, Google Fonts): pure-Rust TLS, OS certificate verification,
+# the same stack as the speech-model downloads.
+ureq = { version = "3", default-features = false, features = ["rustls-no-provider", "platform-verifier"] }
+rustls-rustcrypto = "0.0.2-alpha"
