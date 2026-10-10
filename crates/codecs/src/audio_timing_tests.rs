@@ -223,3 +223,40 @@ fn he_aac_core_upsampled_plays_back_without_seams() {
     let reference = worst_seam(&want[0][8192..frames - 4096]);
     assert!(worst_seam(&steady) <= reference * 1.01 + 1e-6, "seams: {} vs {reference}", worst_seam(&steady));
 }
+
+/// A TikTok download of a slowed edit: AAC frames of 1024 samples at 44.1 kHz, each stamped about
+/// twice as long (1965 samples, every tenth 2905, as in the reported file). Placing each frame at
+/// its stamp left 941 samples of silence after every one: a 21 Hz buzz over the whole clip. The
+/// audio now plays at the rate that fills its timestamps: no holes, an octave down, ending where
+/// the timestamps end.
+#[test]
+fn audio_slowed_through_its_timestamps_plays_without_holes() {
+    let rate = 44_100;
+    let (asc, units) = aac(rate);
+    let durations: Vec<u32> = (0..units.len()).map(|k| if k % 10 == 9 { 2905 } else { 1965 }).collect();
+    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+    let t = w.add_track(TrackConfig::new(SampleEntry::aac(asc.clone(), 2, rate), rate)).unwrap();
+    for (u, &duration) in units.iter().zip(&durations) {
+        w.write_sample(t, WriteSample { data: u, duration, composition_offset: 0, is_sync: true }).unwrap();
+    }
+    let bytes: Arc<[u8]> = w.finish().unwrap().into_inner().into();
+    let src = Mp4Source::open("slowed.mp4", bytes).unwrap();
+    let span: u64 = durations.iter().map(|&d| u64::from(d)).sum();
+    let want_rate = (units.len() as u64 * 1024 * u64::from(rate) / span) as u32;
+    let info = src.info().audio_streams.first().cloned().unwrap();
+    assert_eq!(info.sample_rate, want_rate, "the stream plays at the rate that fills its timestamps");
+    // played at 44.1 kHz: past the priming, up to a frame before the end, no run of silence
+    let frames = span as usize - 4096;
+    let got = played(&src, rate, frames);
+    let steady: Vec<Vec<f32>> = got.iter().map(|c| c[4096..].to_vec()).collect();
+    assert_eq!(holes(&steady), 0, "no silence between frames");
+    // the 440 Hz tone comes out an octave down (zero crossings over a second)
+    let second = &got[0][8192..8192 + rate as usize];
+    let crossings = second.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
+    let hz = crossings as f32 / 2.0;
+    assert!((200.0..260.0).contains(&hz), "{hz} Hz");
+    // and the same reads, block by block, do not depend on how they are cut
+    let once = src.audio(20_000, 4_000, rate).unwrap().channels;
+    let blocks: Vec<f32> = (0..8).flat_map(|b| src.audio(20_000 + b * 500, 500, rate).unwrap().channels[0].clone()).collect();
+    assert!(once[0].iter().zip(&blocks).all(|(a, b)| (a - b).abs() < 1e-6));
+}

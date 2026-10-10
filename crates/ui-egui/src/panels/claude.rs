@@ -340,19 +340,14 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         let w = (ui.available_width() - 74.0).max(60.0);
         let enabled = app.hooks.claude.is_some();
         let input = &mut app.claude.input;
-        let out = egui::ScrollArea::vertical()
-            .id_salt("claude.input.scroll")
-            .max_height(INPUT_MAX_H)
-            .max_width(w)
-            .auto_shrink([false, true])
-            .show(ui, |ui| {
-                let edit = egui::TextEdit::multiline(input)
-                    .hint_text(tl!("Ask Claude to edit… (Enter to send, Shift+Enter for a new line)"))
-                    .desired_rows(3)
-                    .desired_width(ui.available_width())
-                    .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter));
-                ui.add_enabled(enabled, edit)
-            });
+        let out = egui::ScrollArea::vertical().id_salt("claude.input.scroll").max_height(INPUT_MAX_H).max_width(w).auto_shrink([false, true]).show(ui, |ui| {
+            let edit = egui::TextEdit::multiline(input)
+                .hint_text(tl!("Ask Claude to edit… (Enter to send, Shift+Enter for a new line)"))
+                .desired_rows(3)
+                .desired_width(ui.available_width())
+                .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter));
+            ui.add_enabled(enabled, edit)
+        });
         let r = out.inner;
         // the visible part of the box (the text inside can be taller and scroll)
         elems.push(("claude.input".into(), out.inner_rect.intersect(r.rect), "Message".into()));

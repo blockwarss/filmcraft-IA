@@ -40,6 +40,9 @@ struct Mp4Audio {
     offset: i64,
     /// Decoder pre-roll after a seek, in source sample frames (0: prime with one packet).
     preroll: i64,
+    /// The rate the decoder runs at: the stream's own, which differs from the reported
+    /// `AudioStreamInfo::sample_rate` when the timestamps stretch the audio (see [`stretched_rate`]).
+    decode_rate: u32,
 }
 
 pub struct Mp4Source {
@@ -62,7 +65,11 @@ pub fn sniff(b: &[u8]) -> bool {
 /// A remux from Matroska (OBS's) carries the millisecond rounding of its timestamps into the
 /// durations: 1008, 1008, 1056… for 1024-sample AAC frames at 48 kHz (see
 /// [`crate::audio::contiguous_starts`]).
-fn audio_starts(file: &Mp4File, bytes: &crate::Src, ti: usize, rate: u32) -> Vec<i64> {
+///
+/// `decode_rate` is the rate the decoder runs at; when the timestamps stretch the audio
+/// ([`stretched_rate`]) `rate` is the stretched one, a decoded sample lasts one sample at `rate`,
+/// and the packets run on at their average spacing.
+fn audio_starts(file: &Mp4File, bytes: &crate::Src, ti: usize, rate: u32, decode_rate: u32) -> Vec<i64> {
     use crate::audio::{FixedFrames, PacketTime, contiguous_starts, fixed_packet_samples};
     let Some(t) = file.tracks.get(ti) else { return Vec::new() };
     let ts = i128::from(t.timescale.max(1));
@@ -78,16 +85,60 @@ fn audio_starts(file: &Mp4File, bytes: &crate::Src, ti: usize, rate: u32) -> Vec
         .collect();
     let first = || file.read_sample(bytes, ti, 0).unwrap_or_default();
     let frame = match t.entries.first().map(|e| &e.codec) {
-        Some(CodecConfig::Aac(a)) => fixed_packet_samples(FixedFrames::Aac(&a.asc), &[], rate),
-        Some(CodecConfig::Mp3) => fixed_packet_samples(FixedFrames::MpegAudio, &first(), rate),
-        Some(CodecConfig::Ac3 { .. }) => fixed_packet_samples(FixedFrames::Ac3, &first(), rate),
+        Some(CodecConfig::Aac(a)) => fixed_packet_samples(FixedFrames::Aac(&a.asc), &[], decode_rate),
+        Some(CodecConfig::Mp3) => fixed_packet_samples(FixedFrames::MpegAudio, &first(), decode_rate),
+        Some(CodecConfig::Ac3 { .. }) => fixed_packet_samples(FixedFrames::Ac3, &first(), decode_rate),
         _ => None,
     };
     let Some(frame) = frame else { return stamps };
     // samples per track timescale unit, rounded up: how coarse the running total is
     let unit = i64::try_from((i128::from(rate) + ts - 1) / ts).unwrap_or(i64::MAX);
     let packets = stamps.iter().map(|&stamp| PacketTime { stamp, stamped: true, samples: Some(frame) });
-    contiguous_starts(packets, (frame / 2).max(unit.saturating_mul(2).saturating_add(1)))
+    let mut tolerance = (frame / 2).max(unit.saturating_mul(2).saturating_add(1));
+    if rate != decode_rate {
+        // single durations of a stretched stream stray by up to a few packets from the average
+        // spacing: resync only across a real gap of a quarter second
+        tolerance = tolerance.max(i64::from(rate / 4));
+    }
+    contiguous_starts(packets, tolerance)
+}
+
+/// The median packet duration of track `t` in sample frames at `rate` (`None`: no packets).
+fn median_duration(t: &filmcraft_isobmff::Track, rate: u32) -> Option<i64> {
+    let ts = i128::from(t.timescale.max(1));
+    let mut d: Vec<i64> = t.samples.iter().map(|s| i64::try_from(i128::from(s.duration) * i128::from(rate) / ts).unwrap_or(i64::MAX)).collect();
+    if d.is_empty() {
+        return None;
+    }
+    let mid = d.len() / 2;
+    Some(*d.select_nth_unstable(mid).1)
+}
+
+/// The rate at which a fixed-frame stream (`frame` samples per packet at `rate`) must play to fill
+/// the time its timestamps give it, when that is not `rate`: `None` for a normal stream.
+///
+/// Some files (TikTok downloads of slowed edits) keep AAC frames of 1024 samples at 44.1 kHz but
+/// stamp each one about 2048 samples long: the audio is slowed through its timestamps. Placing each
+/// frame at its stamp left a hole of silence after every one, a 21 Hz buzz over the whole clip. The
+/// median duration decides (a real gap or a few odd packets do not), and the rate is the average
+/// over the whole track, so the audio ends where the timestamps end.
+fn stretched_rate(t: &filmcraft_isobmff::Track, rate: u32, frame: i64) -> Option<u32> {
+    const MIN_PACKETS: usize = 16;
+    if frame <= 0 || t.samples.len() < MIN_PACKETS {
+        return None;
+    }
+    let median = median_duration(t, rate)?;
+    if (frame * 4 / 5..=frame * 5 / 4).contains(&median) {
+        return None;
+    }
+    let ts = i128::from(t.timescale.max(1));
+    let total: i128 = t.samples.iter().map(|s| i128::from(s.duration)).sum::<i128>() * i128::from(rate) / ts;
+    let decoded = i128::try_from(t.samples.len()).ok()?.checked_mul(i128::from(frame))?;
+    if total <= 0 {
+        return None;
+    }
+    let r = decoded.checked_mul(i128::from(rate))? / total;
+    u32::try_from(r.clamp(1_000, 384_000)).ok()
 }
 
 /// HDR static metadata from the sample entry's `mdcv` / `clli` boxes (0 = unknown).
@@ -240,7 +291,7 @@ impl Mp4Source {
         });
         // one entry per playable audio track (`playable` guarantees a sample description); a track
         // that somehow has none is dropped so `audio_streams` and `audios` stay index-aligned
-        let (atracks, audio_streams): (Vec<usize>, Vec<AudioStreamInfo>) =
+        let (atracks, (audio_streams, decode_rates)): (Vec<usize>, (Vec<AudioStreamInfo>, Vec<u32>)) =
             atracks.into_iter().filter_map(|i| Some((i, audio_stream_info(file.tracks.get(i)?, &bytes)?))).unzip();
         let duration = vtrack.or(atracks.first().copied()).and_then(|i| file.tracks.get(i)).map(|t| presentation_duration(&file, t)).unwrap_or_default();
         let start_timecode = file.tracks.iter().find_map(|t| match t.codec() {
@@ -259,10 +310,10 @@ impl Mp4Source {
         };
         let audios: Vec<Mp4Audio> = atracks
             .iter()
-            .zip(&info.audio_streams)
-            .filter_map(|(&i, ainfo)| {
+            .zip(info.audio_streams.iter().zip(decode_rates))
+            .filter_map(|(&i, (ainfo, decode_rate))| {
                 let t = file.tracks.get(i)?;
-                let starts = audio_starts(&file, &bytes, i, ainfo.sample_rate);
+                let starts = audio_starts(&file, &bytes, i, ainfo.sample_rate, decode_rate);
                 let ts = t.timescale.max(1) as i64;
                 let (offset, preroll) = match t.entries.first().map(|e| &e.codec) {
                     Some(CodecConfig::Opus(o)) => {
@@ -273,7 +324,7 @@ impl Mp4Source {
                     _ => (t.edit_offset, 0),
                 };
                 let state = Mutex::new(AudioState { decoder: None, packets: HashMap::new(), order: Vec::new(), last_decoded: None });
-                Some(Mp4Audio { track: i, state, starts, offset, preroll })
+                Some(Mp4Audio { track: i, state, starts, offset, preroll, decode_rate })
             })
             .collect();
         Ok(Self { info, bytes, file, vtrack, video: GopCache::new(explicit_color).with_rotation(rotation), audios })
@@ -307,7 +358,7 @@ impl Mp4Source {
             CodecConfig::Pcm(p) => decode_pcm(&data, p),
             c => {
                 if st.decoder.is_none() {
-                    st.decoder = Some(PacketDecoder::for_isobmff(c, ainfo.sample_rate)?);
+                    st.decoder = Some(PacketDecoder::for_isobmff(c, a.decode_rate)?);
                 }
                 // Non-sequential access: reset and prime with the preceding packets (codec pre-roll:
                 // one packet, or `OPUS_PRE_ROLL` worth for Opus).
@@ -448,7 +499,9 @@ impl MediaSource for Mp4Source {
 }
 
 /// What the file says about one audio track (`None`: the track has no sample description).
-fn audio_stream_info(t: &filmcraft_isobmff::Track, bytes: &crate::Src) -> Option<AudioStreamInfo> {
+/// Also returns the rate the decoder runs at, which differs from the reported one when the
+/// timestamps stretch the audio ([`stretched_rate`]).
+fn audio_stream_info(t: &filmcraft_isobmff::Track, bytes: &crate::Src) -> Option<(AudioStreamInfo, u32)> {
     let entry = t.entries.first()?;
     let ap = entry.audio.clone().unwrap_or_default();
     let (rate, ch, bits) = match &entry.codec {
@@ -475,7 +528,15 @@ fn audio_stream_info(t: &filmcraft_isobmff::Track, bytes: &crate::Src) -> Option
         CodecConfig::Opus(o) => (crate::audio::OPUS_RATE, (o.output_channels as u32).max(1), None),
         _ => (if ap.sample_rate > 0.0 { ap.sample_rate as u32 } else { t.timescale }, ap.channels.max(1), None),
     };
-    Some(AudioStreamInfo { sample_rate: rate.max(1), channels: ch.max(1), codec: audio_label(&entry.codec, rate), bits_per_sample: bits })
+    let rate = rate.max(1);
+    let played = match &entry.codec {
+        CodecConfig::Aac(a) => {
+            crate::audio::fixed_packet_samples(crate::audio::FixedFrames::Aac(&a.asc), &[], rate).and_then(|frame| stretched_rate(t, rate, frame))
+        }
+        _ => None,
+    };
+    let info = AudioStreamInfo { sample_rate: played.unwrap_or(rate), channels: ch.max(1), codec: audio_label(&entry.codec, rate), bits_per_sample: bits };
+    Some((info, rate))
 }
 
 /// The audio codec as people know it: AAC names its profile, and an AAC-LC configuration whose
