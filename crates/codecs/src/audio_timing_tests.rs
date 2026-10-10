@@ -176,3 +176,50 @@ fn playing_at_another_rate_leaves_no_holes() {
     let tail: Vec<Vec<f32>> = got.iter().map(|c| c[2048..].to_vec()).collect();
     assert_eq!(holes(&tail), 0);
 }
+
+/// An explicit HE-AAC AudioSpecificConfig (ISO/IEC 14496-3 §1.6.2.1): object type 5 (SBR), the
+/// core rate, `channels`, the output rate, then AAC LC.
+fn he_aac_asc(core: u32, out: u32, channels: u8) -> Vec<u8> {
+    let idx =
+        |r: u32| [96_000, 88_200, 64_000, 48_000, 44_100, 32_000, 24_000, 22_050, 16_000, 12_000, 11_025, 8_000].iter().position(|&x| x == r).unwrap() as u32;
+    // 5 + 4 + 4 + 4 + 5 + 3 (GASpecificConfig flags) = 25 bits
+    let bits: u32 = (5 << 27) | (idx(core) << 23) | (u32::from(channels) << 19) | (idx(out) << 15) | (2 << 10);
+    bits.to_be_bytes().to_vec()
+}
+
+/// A TikTok-style HE-AAC MP4: the LC core at half the output rate, the track's timescale at the
+/// output rate, every access unit lasting 2048 output samples.
+fn he_aac_mp4(asc: &[u8], out: u32, units: &[Vec<u8>]) -> Arc<[u8]> {
+    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+    let t = w.add_track(TrackConfig::new(SampleEntry::aac(asc.to_vec(), 2, out), out)).unwrap();
+    for u in units {
+        w.write_sample(t, WriteSample { data: u, duration: 2048, composition_offset: 0, is_sync: true }).unwrap();
+    }
+    w.finish().unwrap().into_inner().into()
+}
+
+/// Largest jump of the third difference over a tone: a click or a seam stands far above the
+/// smooth curve's own value.
+fn worst_seam(c: &[f32]) -> f32 {
+    c.windows(4).map(|w| (w[3] - 3.0 * w[2] + 3.0 * w[1] - w[0]).abs()).fold(0.0, f32::max)
+}
+
+#[test]
+fn he_aac_core_upsampled_plays_back_without_seams() {
+    let (core_asc, units) = aac(22_050);
+    let asc = he_aac_asc(22_050, 44_100, 2);
+    let want = continuous(&asc, 44_100, &units);
+    assert!(want[0].len() >= units.len() * 2048 - 2048, "the core is upsampled to 44.1 kHz");
+    let _ = core_asc;
+    let src = Mp4Source::open("he.mp4", he_aac_mp4(&asc, 44_100, &units)).unwrap();
+    assert_eq!(src.info().audio_streams.first().map(|a| a.sample_rate), Some(44_100));
+    assert_eq!(src.info().audio_streams.first().map(|a| a.codec.as_str()), Some("HE-AAC (SBR)"), "Media Properties name the profile");
+    let frames = units.len().saturating_sub(1) * 2048;
+    let got = played(&src, 44_100, frames);
+    let (n, first) = mismatches(&got, &want, 0);
+    assert_eq!(n, 0, "{n} samples differ from the continuous decode, first (channel, sample) {first:?}");
+    // the tone itself is smooth once the encoder's priming is past
+    let steady: Vec<f32> = got[0][8192..frames - 4096].to_vec();
+    let reference = worst_seam(&want[0][8192..frames - 4096]);
+    assert!(worst_seam(&steady) <= reference * 1.01 + 1e-6, "seams: {} vs {reference}", worst_seam(&steady));
+}

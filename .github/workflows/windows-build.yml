@@ -1,5 +1,5 @@
 # Windows x64 test build: every push to a `claude/**` work branch (and a manual run on any branch)
-# builds the unsigned MSI and zip the way release.yml does, runs the studio / online-library tests
+# builds the unsigned MSI and zip the way release.yml does (plus speech-to-text), runs the studio / online-library tests
 # on Windows, and keeps the installer as a 7-day artifact to try before merging. Signing happens
 # only in release.yml.
 name: Windows build
@@ -51,6 +51,8 @@ jobs:
         env:
           CRAFT_FONTS_DIR: ${{ github.workspace }}/craft-fonts
           DIST: ${{ github.workspace }}\dist\x64
+          # speech-to-text (transcripts, captions, karaoke captions); the model downloads on first use
+          FILMCRAFT_FEATURES: whisper
         run: ./packaging/windows/package.ps1 -Arch x64
       - uses: actions/upload-artifact@v4
         with:

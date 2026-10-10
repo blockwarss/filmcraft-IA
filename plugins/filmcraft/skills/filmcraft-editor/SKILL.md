@@ -69,9 +69,14 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
 - **Pace**: no shot longer than ~3 s without a change (cut, zoom, text, B-roll). Remove every
   breath gap: `studio.cutSilences {minSeconds: 0.35, padSeconds: 0.08}` for talking, 0.5 / 0.12
   for gameplay commentary.
-- **Captions always** (most people watch muted): `studio.captions {style: "tiktok"}` or
-  `"gaming"`; 1 line, 2–4 words, centred low but above the bottom 20 % (app UI). Fix
-  mis-transcribed words with `transcript.set` / caption edits.
+- **Captions always** (most people watch muted). The TikTok look is **karaoke captions**:
+  `studio.karaoke` (2–3 words per line, the word being said lights up and grows; `style`:
+  `yellow`, `green`, `red`, `cyan`, `boxed`, `dark`; `mode: "word"` for one big word at a time).
+  Plain blocks: `studio.captions {style: "tiktok"}` or `"gaming"`. Both come from the transcript:
+  `transcript.generate` (the first time, `transcript.downloadModel` fetches the speech model once —
+  `whisper-base`, about 150 MB; tell the user). Fix mis-transcribed words with `transcript.set`.
+  No speech-to-text in the build, or lyrics of a song: pass `studio.karaoke {words: [{text, start,
+  end}]}` timed from the beats (`studio.beats`) or the user's lyrics.
 - **Safe zones**: keep text out of the bottom 20 % and the right 15 % (buttons).
 - Length: 15–45 s performs best unless the story needs more. End on the payoff, loop-friendly
   (the last frame should flow into the first).
@@ -174,6 +179,8 @@ them in the loop with short progress lines ("Silences cut: −41 s. Adding capti
   `clips` / `clip` ids, or `timeline.select` first.
 - Bridge errors: the app isn't running; the MCP server started with `--launch` opens it, otherwise
   ask the user to open FilmCraft.
-- `studio.captions` needs a transcript: `transcript.generate` (speech-to-text build) or ask the
-  user for the words and use `transcript.set`.
+- `studio.captions` / `studio.karaoke` need a transcript: `transcript.generate` (download the
+  model first with `transcript.downloadModel` if it says so). If the build has no speech-to-text,
+  ask the user for the words and use `transcript.set`, or time them yourself in
+  `studio.karaoke {words}`.
 - Long exports: `file.exportMedia {…, wait: true}` reports progress; don't start a second one.

@@ -95,6 +95,7 @@ channel. Each edit is one undo step.
 | `studio.format` | TikTok / Reels / Shorts (1080×1920), portrait, square, YouTube 1080p / 4K, clips filling the frame. |
 | `studio.captions` | Captions from the transcript in a style: `tiktok`, `gaming`, `youtube`, `minimal`, `bold`. |
 | `studio.title` | Animated titles sized to fit the frame: `hook`, `gaming`, `meme`, `subscribe`, `lowerThird`, `neon`, `clean`, TikTok's own looks (`boxed`, `boxedDark`, `highlight`, `reply` comment bubble, `part2`), `news`, `warning`, `quote`, `cinematic`, `countdown`, `pixel`, `horror`, `pastel`, `fire`. Entrances: `pop`, `bounce`, `zoom`, `slide`, `drop`, `fade`, `wipe` (typed-on reveal), `shake`, `none`. |
+| `studio.karaoke` | Karaoke captions: 2–3 words per line, the word being said lights up and grows, timed from the transcript (or from `words` you pass with their times). Styles `yellow`, `green`, `red`, `cyan`, `boxed`, `dark`; `mode: "word"` shows one big word at a time. |
 | `studio.overlay` | A picture, sticker or video over the shot on its own track: named spots inside TikTok's safe zone (or `[x, y]`), width as a fraction of the frame, rotation, `pop` / `bounce` / `fade` / `slide` / `spin` entrance and a quick exit. |
 | `studio.broll` | A full-frame cut-in above the main shot for N seconds (pictures get a slow push-in; long agency footage starts at its liveliest moment, past title slates). |
 | `studio.blurFill` | Landscape footage in a vertical frame: the whole shot over a blurred, darkened, frame-filling copy of itself, instead of black bars. |

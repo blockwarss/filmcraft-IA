@@ -475,7 +475,20 @@ fn audio_stream_info(t: &filmcraft_isobmff::Track, bytes: &crate::Src) -> Option
         CodecConfig::Opus(o) => (crate::audio::OPUS_RATE, (o.output_channels as u32).max(1), None),
         _ => (if ap.sample_rate > 0.0 { ap.sample_rate as u32 } else { t.timescale }, ap.channels.max(1), None),
     };
-    Some(AudioStreamInfo { sample_rate: rate.max(1), channels: ch.max(1), codec: codec_label(&entry.codec), bits_per_sample: bits })
+    Some(AudioStreamInfo { sample_rate: rate.max(1), channels: ch.max(1), codec: audio_label(&entry.codec, rate), bits_per_sample: bits })
+}
+
+/// The audio codec as people know it: AAC names its profile, and an AAC-LC configuration whose
+/// access units carry SBR (HE-AAC with implicit signalling, found by [`crate::audio::aac_output_rate`])
+/// says so, since the high band above the core's rate is not reconstructed yet.
+fn audio_label(c: &CodecConfig, out_rate: u32) -> String {
+    match c {
+        CodecConfig::Aac(a) if a.object_type == 2 && a.sample_rate > 0 && out_rate == a.sample_rate.saturating_mul(2) => "HE-AAC (SBR, implicit)".into(),
+        CodecConfig::Aac(a) if a.object_type == 2 => "AAC LC".into(),
+        CodecConfig::Aac(a) if a.object_type == 29 => "HE-AAC v2 (SBR + PS)".into(),
+        CodecConfig::Aac(a) if a.object_type == 5 => "HE-AAC (SBR)".into(),
+        other => codec_label(other),
+    }
 }
 
 fn codec_label(c: &CodecConfig) -> String {

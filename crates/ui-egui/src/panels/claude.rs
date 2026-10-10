@@ -14,6 +14,9 @@ use egui::{Align2, Color32, Key, KeyboardShortcut, Modifiers, Rect, RichText, Se
 use crate::FilmcraftApp;
 use crate::theme::Tokens;
 
+/// Tallest the message box grows (about 8 lines) before it scrolls.
+const INPUT_MAX_H: f32 = 150.0;
+
 /// What the host reports while Claude works.
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClaudeEvent {
@@ -80,7 +83,7 @@ pub const QUICK: &[(&str, &str, &str)] = &[
         "Make a high-energy gaming montage from the clips in this project: find the highlights, generate a phonk beat, cut on the beats with the best moment on the drop, and add punch zooms, shakes and impact sounds on the highlights.",
     ),
     ("silences", "Cut silences", "Cut the dead air out of the active sequence (jump cuts) and tell me how much time was removed."),
-    ("captions", "Add captions", "Add bold, readable TikTok-style captions to the active sequence."),
+    ("captions", "Add captions", "Add TikTok-style karaoke captions to the active sequence (the spoken word lights up), transcribing it first if needed."),
     ("music", "Add music", "Add a music bed that fits the mood under the whole sequence, ducked under the voice, ending cleanly."),
     (
         "review",
@@ -269,8 +272,10 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
     });
     ui.add_space(6.0);
 
-    // conversation
-    let input_h = 86.0;
+    // conversation: everything above the input, whose height (measured last frame) grows with
+    // the message up to INPUT_MAX_H
+    let input_key = egui::Id::new("claude.input.height");
+    let input_h = ui.data(|d| d.get_temp::<f32>(input_key)).unwrap_or(86.0).clamp(60.0, INPUT_MAX_H + 40.0);
     let list_h = (ui.available_height() - input_h).max(40.0);
     let width = ui.available_width();
     egui::ScrollArea::vertical().max_height(list_h).auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
@@ -329,16 +334,28 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
         }
     });
 
-    // input
+    // input: grows with the message, then scrolls (the cursor stays in view)
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        let edit = egui::TextEdit::multiline(&mut app.claude.input)
-            .hint_text(tl!("Ask Claude to edit… (Enter to send, Shift+Enter for a new line)"))
-            .desired_rows(3)
-            .desired_width(ui.available_width() - 74.0)
-            .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter));
-        let r = ui.add_enabled(app.hooks.claude.is_some(), edit);
-        elems.push(("claude.input".into(), r.rect, "Message".into()));
+    let row = ui.horizontal(|ui| {
+        let w = (ui.available_width() - 74.0).max(60.0);
+        let enabled = app.hooks.claude.is_some();
+        let input = &mut app.claude.input;
+        let out = egui::ScrollArea::vertical()
+            .id_salt("claude.input.scroll")
+            .max_height(INPUT_MAX_H)
+            .max_width(w)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                let edit = egui::TextEdit::multiline(input)
+                    .hint_text(tl!("Ask Claude to edit… (Enter to send, Shift+Enter for a new line)"))
+                    .desired_rows(3)
+                    .desired_width(ui.available_width())
+                    .return_key(KeyboardShortcut::new(Modifiers::SHIFT, Key::Enter));
+                ui.add_enabled(enabled, edit)
+            });
+        let r = out.inner;
+        // the visible part of the box (the text inside can be taller and scroll)
+        elems.push(("claude.input".into(), out.inner_rect.intersect(r.rect), "Message".into()));
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter) && !i.modifiers.shift);
         ui.vertical(|ui| {
             if app.claude.busy {
@@ -365,6 +382,11 @@ pub fn show(app: &mut FilmcraftApp, ui: &mut egui::Ui, rect: Rect) {
             }
         });
     });
+    let used = row.response.rect.height() + 4.0;
+    if (used - input_h).abs() > 0.5 {
+        ui.data_mut(|d| d.insert_temp(input_key, used));
+        ui.ctx().request_repaint();
+    }
 
     for (id, r, l) in elems {
         app.auto.add(&id, r, &l);

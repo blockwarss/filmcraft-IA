@@ -188,6 +188,94 @@ fn transitions_keyframe_both_sides_of_the_cut_and_add_their_sound() {
     assert!(s.execute("studio.transition", json!({"style": "nope"})).is_err());
 }
 
+fn tw(text: &str, a: f64, b: f64) -> TimedWord {
+    TimedWord { text: text.into(), start: Tick::from_seconds_f64(a), end: Tick::from_seconds_f64(b) }
+}
+
+#[test]
+fn karaoke_lines_break_on_size_pauses_and_sentences() {
+    let w = [
+        tw("this", 0.0, 0.2),
+        tw("is", 0.2, 0.3),
+        tw("so", 0.3, 0.5),
+        tw("cool.", 0.5, 0.9),
+        tw("wait", 2.0, 2.2),
+        tw("what", 2.2, 2.5),
+        tw("extraordinarily", 2.5, 3.0),
+    ];
+    let c = karaoke_chunks(&w, 3, 16, Tick::from_seconds_f64(0.6));
+    // 3 words max; "cool." ends a sentence; the 1.1 s pause; "extraordinarily" doesn't fit
+    assert_eq!(c, vec![0..3, 3..4, 4..6, 6..7]);
+    assert_eq!(karaoke_chunks(&w, 1, 16, Tick::from_seconds_f64(0.6)).len(), 7);
+    assert!(karaoke_chunks(&[], 3, 16, Tick::ZERO).is_empty());
+}
+
+/// The demo project with a fake recogniser: "this is so cool. wait what" on the first A1 clip.
+fn transcribed() -> Session {
+    let mut s = demo();
+    let q = s.active_sequence().unwrap();
+    let a = &q.audio_tracks[0].items[0];
+    let sin = a.source_in;
+    let mut t = filmcraft_project::Transcript { language: "en".into(), ..Default::default() };
+    for (text, x, y) in [("this", 0.2, 0.4), ("is", 0.4, 0.6), ("so", 0.6, 0.8), ("cool.", 0.8, 1.3), ("wait", 2.0, 2.3), ("what", 2.3, 2.8)] {
+        t.words.push(filmcraft_project::Word::new(text, sin + Tick::from_seconds_f64(x), sin + Tick::from_seconds_f64(y)));
+    }
+    t.normalize();
+    s.transcriber = Some(std::sync::Arc::new(filmcraft_speech::FixedTranscriber { transcript: t, id: "fixed".into() }));
+    s.execute("transcript.generate", json!({})).unwrap();
+    s
+}
+
+#[test]
+fn karaoke_highlights_each_word_in_turn_without_overlaps() {
+    let mut s = transcribed();
+    s.execute("studio.format", json!({"preset": "tiktok"})).unwrap();
+    let undo = s.history.undo.len();
+    // the fake recogniser hears the same words in every clip: keep the first clip's
+    let a1 = s.active_sequence().unwrap().audio_tracks[0].items[0].start.seconds();
+    let r = s.execute("studio.karaoke", json!({"toSeconds": a1 + 2.9})).unwrap();
+    assert_eq!(s.history.undo.len(), undo + 1, "{r}");
+    assert_eq!(r["words"], 6, "{r}");
+    assert_eq!(r["lines"], 3, "{r}");
+    assert_eq!(r["clips"], 6, "{r}");
+    let q = s.active_sequence().unwrap();
+    let tr = q.video_tracks.iter().find(|t| t.id.0 == r["track"].as_u64().unwrap()).unwrap();
+    // the track may hold other clips outside the captions' span
+    let (from, to) = (Tick::from_seconds_f64(r["from"].as_f64().unwrap() - 0.05), Tick::from_seconds_f64(r["to"].as_f64().unwrap() + 1.0));
+    let mut items: Vec<_> = tr.items.iter().filter(|i| i.start >= from && i.start < to).collect();
+    assert_eq!(items.len(), 6);
+    items.sort_by_key(|i| i.start);
+    for pair in items.windows(2) {
+        assert!(pair[0].end() <= pair[1].start, "no overlaps");
+    }
+    // every clip highlights exactly one word of its line
+    let styles = s.execute("graphics.list", json!({"clip": items[1].id.0})).unwrap()["layers"][0]["styles"].clone();
+    assert_eq!(styles.as_array().unwrap().len(), 1, "{styles}");
+    assert_eq!((styles[0]["start"].as_u64(), styles[0]["end"].as_u64()), (Some(5), Some(7)), "IS in \"THIS IS SO\"");
+    // one word at a time, and explicit timing without a transcript
+    let mut s = demo();
+    let w = s
+        .execute(
+            "studio.karaoke",
+            json!({"mode": "word", "style": "boxed", "words": [{"text": "no", "start": 0.5, "end": 0.8}, {"text": "way", "start": 0.8, "end": 1.2}]}),
+        )
+        .unwrap();
+    assert_eq!((w["lines"].as_u64(), w["clips"].as_u64()), (Some(2), Some(2)), "{w}");
+    for st in KARAOKE_STYLES {
+        s.execute("studio.karaoke", json!({"style": st.0, "words": [{"text": "hey", "start": 5.0, "end": 5.3}]})).unwrap();
+    }
+}
+
+#[test]
+fn karaoke_explains_what_is_missing() {
+    let mut s = demo();
+    let e = s.execute("studio.karaoke", json!({})).unwrap_err().to_string();
+    assert!(e.contains("transcript"), "{e}");
+    for bad in [json!({"words": [{"text": "x"}]}), json!({"words": [{"text": "x", "start": 2, "end": 1}]}), json!({"style": "nope", "words": []})] {
+        assert!(s.execute("studio.karaoke", bad).is_err());
+    }
+}
+
 #[test]
 fn hostile_parameters_never_panic() {
     let mut s = demo();
@@ -209,6 +297,11 @@ fn hostile_parameters_never_panic() {
     let _ = s.execute("studio.look", json!({"look": "vibrant", "clips": [123456789], "intensity": f64::NAN}));
     let _ = s.execute("studio.transition", json!({"track": 99, "durationSeconds": 1e9}));
     let _ = s.execute("studio.blurFill", json!({"clips": [], "blur": -1e300}));
+    let _ = s.execute(
+        "studio.karaoke",
+        json!({"words": [{"text": "a", "start": 1e300, "end": 1e301}], "wordsPerLine": 0, "maxChars": 0, "sizeScale": f64::INFINITY}),
+    );
+    let _ = s.execute("studio.karaoke", json!({"words": [{"text": "🔥🔥🔥", "start": 0, "end": 0}, {"text": "b", "start": 0, "end": 0}]}));
 }
 
 /// Renders a showcase of the recipes to PNGs for a human to look at:
@@ -262,6 +355,12 @@ fn showcase() {
         shot(&mut s, &format!("transition-{style}-before"), 1.93);
         shot(&mut s, &format!("transition-{style}-after"), 2.04);
     }
+    let mut s = transcribed();
+    s.execute("studio.format", json!({"preset": "tiktok"})).unwrap();
+    let a1 = s.active_sequence().unwrap().audio_tracks[0].items[0].start.seconds();
+    s.execute("studio.karaoke", json!({"toSeconds": a1 + 2.9})).unwrap();
+    shot(&mut s, "karaoke-is", a1 + 0.5);
+    shot(&mut s, "karaoke-cool", a1 + 1.0);
     let mut s = demo();
     for (style, pos) in [("gaming", "top"), ("highlight", "center"), ("news", "bottom")] {
         s.execute(

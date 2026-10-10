@@ -764,6 +764,192 @@ fn transition(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
+// ------------------------------------------------------------------------------- karaoke captions
+
+/// One timed word (sequence time).
+#[derive(Clone, Debug, PartialEq)]
+pub struct TimedWord {
+    pub text: String,
+    pub start: Tick,
+    pub end: Tick,
+}
+
+/// Group words into short caption chunks: at most `max_words` words and `max_chars` characters,
+/// broken at pauses longer than `pause` and after sentence ends.
+pub fn karaoke_chunks(words: &[TimedWord], max_words: usize, max_chars: usize, pause: Tick) -> Vec<std::ops::Range<usize>> {
+    let mut out = Vec::new();
+    let mut a = 0;
+    let mut chars = 0;
+    for (i, w) in words.iter().enumerate() {
+        let n = w.text.chars().count();
+        let gap = i > a && words.get(i.wrapping_sub(1)).is_some_and(|p| w.start - p.end > pause);
+        let full = i > a && (i - a >= max_words.max(1) || chars + 1 + n > max_chars.max(1));
+        if gap || full {
+            out.push(a..i);
+            a = i;
+            chars = 0;
+        }
+        chars += n + usize::from(chars > 0);
+        if w.text.ends_with(['.', '!', '?', '…']) {
+            out.push(a..i + 1);
+            a = i + 1;
+            chars = 0;
+        }
+    }
+    if a < words.len() {
+        out.push(a..words.len());
+    }
+    out
+}
+
+/// Karaoke looks: (id, text colour, active-word colour, outline colour, background).
+pub const KARAOKE_STYLES: &[(&str, &str, &str, &str, Option<&str>)] = &[
+    ("yellow", "#ffffff", "#ffe135", "#000000", None),
+    ("green", "#ffffff", "#39ff14", "#000000", None),
+    ("red", "#ffffff", "#ff2d55", "#000000", None),
+    ("cyan", "#ffffff", "#25f4ee", "#000000", None),
+    ("boxed", "#000000", "#fe2c55", "#000000", Some("#ffffff")),
+    ("dark", "#ffffff", "#ffe135", "#000000", Some("#000000b3")),
+];
+
+fn karaoke_words(s: &Session, p: &Value) -> Result<Vec<TimedWord>> {
+    const CMD: &str = "studio.karaoke";
+    if let Some(a) = p.get("words").and_then(Value::as_array) {
+        let mut v = Vec::new();
+        for w in a.iter().take(5000) {
+            let text = w.get("text").and_then(Value::as_str).map(str::trim).unwrap_or("");
+            let (Some(st), Some(en)) = (w.get("start").and_then(Value::as_f64), w.get("end").and_then(Value::as_f64)) else {
+                return Err(bad(CMD, "each word needs `text`, `start` and `end` (sequence seconds)"));
+            };
+            if text.is_empty() || !st.is_finite() || !en.is_finite() || st < 0.0 || en < st {
+                return Err(bad(CMD, format!("bad word `{text}` ({st} → {en})")));
+            }
+            v.push(TimedWord { text: text.chars().take(60).collect(), start: sec(st.min(1e6)), end: sec(en.min(1e6)) });
+        }
+        v.sort_by_key(|w| w.start);
+        return Ok(v);
+    }
+    let words = crate::transcript::sequence_words(s);
+    if words.is_empty() {
+        let why = if crate::transcript::can_transcribe(s).is_ok() {
+            "the sequence has no transcript yet: run transcript.generate first (it downloads the speech model once with transcript.downloadModel)"
+        } else {
+            "the sequence has no transcript and this build has no speech-to-text: pass `words` [{text, start, end}] with the timing, or use a FilmCraft build with the `whisper` feature"
+        };
+        return Err(bad(CMD, why));
+    }
+    let (from, to) = (f64_p(p, "fromSeconds").map(sec), f64_p(p, "toSeconds").map(sec));
+    Ok(words
+        .into_iter()
+        .filter(|w| from.is_none_or(|f| w.end > f) && to.is_none_or(|t| w.start < t))
+        .map(|w| TimedWord { text: w.text.trim().to_string(), start: w.start, end: w.end })
+        .filter(|w| !w.text.is_empty())
+        .take(5000)
+        .collect())
+}
+
+fn karaoke(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "studio.karaoke";
+    let name = str_p(p, "style").unwrap_or("yellow").to_ascii_lowercase();
+    let &(id, fill, active, outline, bg) = KARAOKE_STYLES.iter().find(|k| k.0 == name).ok_or_else(|| {
+        let all: Vec<&str> = KARAOKE_STYLES.iter().map(|k| k.0).collect();
+        bad(CMD, format!("unknown style `{name}` ({})", all.join(", ")))
+    })?;
+    let active = str_p(p, "highlight").unwrap_or(active).to_string();
+    let fill = str_p(p, "color").unwrap_or(fill).to_string();
+    let one_word = str_p(p, "mode").is_some_and(|m| m.eq_ignore_ascii_case("word"));
+    let max_words = if one_word { 1 } else { u64_p(p, "wordsPerLine").unwrap_or(3).clamp(1, 8) as usize };
+    let max_chars = u64_p(p, "maxChars").unwrap_or(16).clamp(4, 60) as usize;
+    let upper = bool_p(p, "uppercase").unwrap_or(true);
+    let font = str_p(p, "font").map(str::to_string);
+    let words = karaoke_words(s, p)?;
+    if words.is_empty() {
+        return Err(bad(CMD, "no words in that range"));
+    }
+    let (w, h) = frame(s)?;
+    let y = match str_p(p, "position").unwrap_or("bottom") {
+        "top" => h * 0.22,
+        "center" | "middle" => h * 0.5,
+        _ => h * 0.7,
+    };
+    // the longest line fits 90 % of the width (bold capitals ≈ 0.62 em)
+    let px = (0.055 * h * f64_p(p, "sizeScale").unwrap_or(1.0).clamp(0.3, 4.0)).min(0.9 * w / (0.62 * max_chars as f64)).max(12.0).round();
+    let chunks = karaoke_chunks(&words, max_words, max_chars, sec(0.6));
+    let rate = s.sequence_rate();
+    let fd = rate.frame_duration();
+    let first = words.first().map(|x| x.start).unwrap_or_default();
+    let last = words.last().map(|x| x.end.max(x.start + fd)).unwrap_or_default();
+    s.compound(&format!("Karaoke Captions ({id})"), |s| {
+        let tid = free_video_track(s, first, last - first, 1)?;
+        let track = s.active_sequence().and_then(|q| q.video_tracks.iter().position(|t| t.id == tid)).ok_or(EngineError::NoSequence)?;
+        let mut clips = 0usize;
+        let mut prev_end = Tick::ZERO;
+        for (ci, r) in chunks.iter().enumerate() {
+            let Some(group) = words.get(r.clone()) else { continue };
+            let next_chunk = chunks.get(ci + 1).and_then(|n| words.get(n.start)).map(|x| x.start);
+            let texts: Vec<String> = group.iter().map(|x| if upper { x.text.to_uppercase() } else { x.text.clone() }).collect();
+            let line = texts.join(" ");
+            // character offsets of each word in the line
+            let mut offs = Vec::with_capacity(texts.len());
+            let mut at = 0usize;
+            for t in &texts {
+                let n = t.chars().count();
+                offs.push((at, at + n));
+                at += n + 1;
+            }
+            let chunk_end = group.last().map(|x| x.end.max(x.start + sec(0.25))).unwrap_or(prev_end);
+            // the line stays a little after its last word, up to the next line
+            let chunk_end = match next_chunk {
+                Some(n) => (chunk_end + sec(0.3)).min(n).max(chunk_end.min(n)),
+                None => chunk_end + sec(0.15),
+            };
+            for (wi, word) in group.iter().enumerate() {
+                let start = rate.snap(if wi == 0 { word.start } else { word.start.max(prev_end) }).max(prev_end);
+                let end = group.get(wi + 1).map_or(chunk_end, |n| n.start);
+                let end = rate.snap(end).max(start + fd);
+                if let Some(n) = next_chunk.map(|n| rate.snap(n))
+                    && end > n
+                    && n > start
+                {
+                    // never overlap the next line
+                    prev_end = n;
+                } else {
+                    prev_end = end;
+                }
+                let dur = prev_end - start;
+                if dur <= Tick::ZERO {
+                    continue;
+                }
+                let mut q = json!({"text": line, "size": px, "position": [w / 2.0, y], "seconds": secs(dur), "time": start.0, "newClip": true, "track": track});
+                if let Some(f) = &font {
+                    q["font"] = json!(f);
+                }
+                let r = s.execute("graphics.newText", q)?;
+                let clip = r["clip"].as_u64().map(ClipId).ok_or_else(|| EngineError::Other(format!("no caption clip in {r}")))?;
+                let mut props = json!({"font_style": "Bold", "fill_color": fill, "align": "center", "stroke": true, "stroke_color": outline, "stroke_width": (px * 0.12).round(), "shadow": true});
+                if let Some(b) = bg {
+                    props["stroke"] = json!(false);
+                    props["background"] = json!(true);
+                    props["background_color"] = json!(b);
+                    props["background_size"] = json!((px * 0.3).round());
+                    props["background_radius"] = json!((px * 0.2).round());
+                }
+                s.execute("graphics.set", json!({"clip": clip.0, "props": props}))?;
+                if let Some(&(a, b)) = offs.get(wi) {
+                    s.execute("graphics.setCharStyle", json!({"clip": clip.0, "start": a, "end": b, "style": {"color": active, "size": (px * 1.12).round()}}))?;
+                }
+                // the line pops in on its first word (every word in one-word mode)
+                if wi == 0 {
+                    let k = |x: f64| start + sec(x);
+                    motion_keys(s, "Karaoke", clip, "scale", vec![(start, f(70.0)), (k(0.07), f(108.0)), (k(0.12), f(100.0))], true)?;
+                }
+                clips += 1;
+            }
+        }
+        Ok(json!({"style": id, "words": words.len(), "lines": chunks.len(), "clips": clips, "track": tid.0, "size": px, "from": secs(first), "to": secs(last)}))
+    })
+}
+
 // ------------------------------------------------------------------------------- lists
 
 fn fx_list(_s: &mut Session, _p: &Value) -> Result<Value> {
@@ -789,6 +975,14 @@ macro_rules! spec {
 pub(crate) fn commands() -> Vec<CommandSpec> {
     vec![
         spec!("studio.fx.list", "List Effects, Looks & Transitions", "{}", always, fx_list, false),
+        spec!(
+            "studio.karaoke",
+            "Karaoke Captions",
+            r##"{"style":"yellow|green|red|cyan|boxed|dark"="yellow","mode":"line|word"="line","wordsPerLine":n=3,"maxChars":n=16,"position":"bottom|center|top","highlight":"#rrggbb"?,"color":"#rrggbb"?,"font":str?,"sizeScale":1,"uppercase":bool=true,"fromSeconds"?,"toSeconds"?,"words":[{"text","start","end"}]? (sequence seconds; default: the sequence transcript)}"##,
+            has_seq,
+            karaoke,
+            true
+        ),
         spec!(
             "studio.overlay",
             "Add Overlay / Sticker",
