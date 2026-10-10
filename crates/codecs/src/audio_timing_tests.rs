@@ -224,66 +224,43 @@ fn he_aac_core_upsampled_plays_back_without_seams() {
     assert!(worst_seam(&steady) <= reference * 1.01 + 1e-6, "seams: {} vs {reference}", worst_seam(&steady));
 }
 
-/// A TikTok download of a slowed edit: AAC frames of 1024 samples at 44.1 kHz, each stamped about
-/// twice as long (1965 samples, every tenth 2905, as in the reported file). Placing each frame at
-/// its stamp left 941 samples of silence after every one: a 21 Hz buzz over the whole clip. The
-/// audio now plays at the rate that fills its timestamps: no holes, an octave down, ending where
-/// the timestamps end.
+/// A TikTok download: AAC frames of 1024 samples at 44.1 kHz (a continuous recording), each
+/// stamped about twice as long (1965 samples, every tenth 2905, as in the reported file). Placing
+/// each frame at its stamp left 941 samples of silence after every one: a 21 Hz buzz over the
+/// whole clip; stretching the audio to the stamps played it an octave down. The frames now play
+/// back to back, as decoders and players do: the continuous decode, at its own pitch.
 #[test]
-fn audio_slowed_through_its_timestamps_plays_without_holes() {
+fn audio_whose_timestamps_disagree_plays_back_to_back() {
     let rate = 44_100;
     let (asc, units) = aac(rate);
+    let want = continuous(&asc, rate, &units);
     let durations: Vec<u32> = (0..units.len()).map(|k| if k % 10 == 9 { 2905 } else { 1965 }).collect();
     let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
     let t = w.add_track(TrackConfig::new(SampleEntry::aac(asc.clone(), 2, rate), rate)).unwrap();
     for (u, &duration) in units.iter().zip(&durations) {
         w.write_sample(t, WriteSample { data: u, duration, composition_offset: 0, is_sync: true }).unwrap();
     }
-    let bytes: Arc<[u8]> = w.finish().unwrap().into_inner().into();
-    let src = Mp4Source::open("slowed.mp4", bytes).unwrap();
-    let span: u64 = durations.iter().map(|&d| u64::from(d)).sum();
-    let info = src.info().audio_streams.first().cloned().unwrap();
-    // the stream keeps its own rate (a sequence made from the clip is at 44.1 kHz, not at the
-    // stretched rate); the stretch happens inside the source
-    assert_eq!(info.sample_rate, rate);
-    // played at 44.1 kHz: past the priming, up to a frame before the end, no run of silence
-    let frames = span as usize - 4096;
+    let src = Mp4Source::open("tiktok.mp4", w.finish().unwrap().into_inner().into()).unwrap();
+    assert_eq!(src.info().audio_streams.first().map(|a| a.sample_rate), Some(rate));
+    let frames = units.len().saturating_sub(1) * 1024;
     let got = played(&src, rate, frames);
-    let steady: Vec<Vec<f32>> = got.iter().map(|c| c[4096..].to_vec()).collect();
-    assert_eq!(holes(&steady), 0, "no silence between frames");
-    // and no hiss: an 8 kHz tone plays at about 4 kHz; linear interpolation folded it back at
-    // the stretched rate's mirror (about 18 kHz, -27 dB), the windowed sinc keeps it far below
-    let hi = (0..rate as usize).map(|i| 0.5 * (std::f32::consts::TAU * 8_000.0 * i as f32 / rate as f32).sin()).collect::<Vec<f32>>();
-    let mut enc = filmcraft_aac::Encoder::new(filmcraft_aac::EncoderConfig::cbr(rate, 2, 160_000)).unwrap();
-    let mut hi_units = enc.encode(&[&hi, &hi]);
-    hi_units.extend(enc.flush());
-    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
-    let t = w.add_track(TrackConfig::new(SampleEntry::aac(enc.audio_specific_config(), 2, rate), rate)).unwrap();
-    for (k, u) in hi_units.iter().enumerate() {
-        w.write_sample(t, WriteSample { data: u, duration: if k % 10 == 9 { 2905 } else { 1965 }, composition_offset: 0, is_sync: true }).unwrap();
-    }
-    let src_hi = Mp4Source::open("slowed-hi.mp4", w.finish().unwrap().into_inner().into()).unwrap();
-    let tone = src_hi.audio(rate as i64, 8192, rate).unwrap().channels[0].clone();
-    let level = |hz: f32| {
-        let (mut re, mut im) = (0f32, 0f32);
-        for (n, v) in tone.iter().enumerate() {
-            let w = 0.5 - 0.5 * (std::f32::consts::TAU * n as f32 / tone.len() as f32).cos();
-            let ph = std::f32::consts::TAU * hz * n as f32 / rate as f32;
-            re += v * w * ph.cos();
-            im += v * w * ph.sin();
+    let (n, first) = mismatches(&got, &want, 0);
+    assert_eq!(n, 0, "{n} samples differ from the continuous decode, first (channel, sample) {first:?}");
+    // the 440 Hz tone keeps its pitch (zero crossings over half a second)
+    let half = &got[0][4096..4096 + rate as usize / 2];
+    let hz = half.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count() as f32;
+    assert!((420.0..460.0).contains(&hz), "{hz} Hz");
+    // random access gives the same samples
+    let src2 = Mp4Source::open("tiktok.mp4", {
+        let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+        let t = w.add_track(TrackConfig::new(SampleEntry::aac(asc, 2, rate), rate)).unwrap();
+        for (u, &duration) in units.iter().zip(&durations) {
+            w.write_sample(t, WriteSample { data: u, duration, composition_offset: 0, is_sync: true }).unwrap();
         }
-        (re * re + im * im).sqrt()
-    };
-    let fundamental = (3_800..4_200).step_by(5).map(|f| level(f as f32)).fold(0f32, f32::max);
-    let images = (16_000..20_000).step_by(5).map(|f| level(f as f32)).fold(0f32, f32::max);
-    assert!(images < fundamental * 3e-3, "images {images} vs tone {fundamental}");
-    // the 440 Hz tone comes out an octave down (zero crossings over a second)
-    let second = &got[0][8192..8192 + rate as usize];
-    let crossings = second.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
-    let hz = crossings as f32 / 2.0;
-    assert!((200.0..260.0).contains(&hz), "{hz} Hz");
-    // and the same reads, block by block, do not depend on how they are cut
-    let once = src.audio(20_000, 4_000, rate).unwrap().channels;
-    let blocks: Vec<f32> = (0..8).flat_map(|b| src.audio(20_000 + b * 500, 500, rate).unwrap().channels[0].clone()).collect();
-    assert!(once[0].iter().zip(&blocks).all(|(a, b)| (a - b).abs() < 1e-6));
+        w.finish().unwrap().into_inner().into()
+    })
+    .unwrap();
+    let at = src2.audio(20_011, 4_000, rate).unwrap().channels;
+    let expect: Vec<Vec<f32>> = want.iter().map(|c| c[20_011..24_011].to_vec()).collect();
+    assert_eq!(mismatches(&at, &expect, 0).0, 0, "seek");
 }
