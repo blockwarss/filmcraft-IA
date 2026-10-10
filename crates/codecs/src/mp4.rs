@@ -40,9 +40,42 @@ struct Mp4Audio {
     offset: i64,
     /// Decoder pre-roll after a seek, in source sample frames (0: prime with one packet).
     preroll: i64,
-    /// The rate the decoder runs at: the stream's own, which differs from the reported
-    /// `AudioStreamInfo::sample_rate` when the timestamps stretch the audio (see [`stretched_rate`]).
+    /// The rate the decoder runs at (the reported `AudioStreamInfo::sample_rate`).
     decode_rate: u32,
+    /// The rate the decoded samples play at: `decode_rate`, or slower when the timestamps stretch
+    /// the audio ([`stretched_rate`]); `starts` are in sample frames at this rate.
+    play_rate: u32,
+    /// For a stretched stream, the edit list's offset mapped onto `starts` ([`stretched_offset`]),
+    /// in sample frames at `play_rate`.
+    play_offset: Option<i64>,
+}
+
+impl Mp4Audio {
+    fn stretched(&self) -> bool {
+        self.play_rate != self.decode_rate
+    }
+}
+
+/// Taps on each side of the interpolation point when a stretched stream is resampled
+/// ([`sinc_weights`]).
+const SINC_HALF: usize = 16;
+
+/// Windowed-sinc interpolation weights for the source samples `i0 - SINC_HALF + 1 ..= i0 +
+/// SINC_HALF` at fractional position `frac` past `i0`, low-passed at `cutoff` (a fraction of the
+/// source Nyquist), normalised to unit gain. Linear interpolation folds a stretched stream's top
+/// octave back down as a hiss; this keeps it clean.
+fn sinc_weights(frac: f64, cutoff: f64) -> [f32; 2 * SINC_HALF] {
+    let m = SINC_HALF as f64;
+    let mut w = [0f64; 2 * SINC_HALF];
+    for (j, v) in w.iter_mut().enumerate() {
+        let x = j as f64 - (m - 1.0) - frac;
+        let sinc = if x.abs() < 1e-9 { 1.0 } else { (std::f64::consts::PI * cutoff * x).sin() / (std::f64::consts::PI * cutoff * x) };
+        let win = 0.42 + 0.5 * (std::f64::consts::PI * x / m).cos() + 0.08 * (2.0 * std::f64::consts::PI * x / m).cos();
+        *v = if x.abs() < m { sinc * win.max(0.0) } else { 0.0 };
+    }
+    let sum: f64 = w.iter().sum();
+    let norm = if sum.abs() > 1e-9 { sum } else { 1.0 };
+    w.map(|v| (v / norm) as f32)
 }
 
 pub struct Mp4Source {
@@ -101,6 +134,38 @@ fn audio_starts(file: &Mp4File, bytes: &crate::Src, ti: usize, rate: u32, decode
         tolerance = tolerance.max(i64::from(rate / 4));
     }
     contiguous_starts(packets, tolerance)
+}
+
+/// Where presentation starts for a stretched stream, as the `offset` of [`Mp4Audio::play_offset`]:
+/// the edit list's `offset` (track timescale) mapped through the packet timestamps onto their
+/// back-to-back `starts` (frames at the play rate). The priming packets an edit list skips keep
+/// their real length in the timestamps while the rest are stretched, so converting the offset at
+/// the average rate would start the audio part of a packet late.
+fn stretched_offset(t: &filmcraft_isobmff::Track, play_rate: u32, starts: &[i64], offset: i64) -> i64 {
+    let ts = i128::from(t.timescale.max(1));
+    let u = -i128::from(offset);
+    let mut stamp = 0i128;
+    let mut at = 0usize;
+    for (i, s) in t.samples.iter().enumerate() {
+        if stamp > u {
+            break;
+        }
+        at = i;
+        if i + 1 < t.samples.len() && stamp + i128::from(s.duration) <= u {
+            stamp += i128::from(s.duration);
+        } else {
+            break;
+        }
+    }
+    let start = i128::from(starts.get(at).copied().unwrap_or(0));
+    let within = u - stamp;
+    let dur = t.samples.get(at).map_or(0, |s| i128::from(s.duration));
+    let len = match (starts.get(at), starts.get(at + 1)) {
+        (Some(a), Some(b)) => i128::from(b.saturating_sub(*a)),
+        _ => 0,
+    };
+    let into = if dur > 0 && len > 0 { within * len / dur } else { within * i128::from(play_rate) / ts };
+    i64::try_from(-(start + into)).unwrap_or(0)
 }
 
 /// The median packet duration of track `t` in sample frames at `rate` (`None`: no packets).
@@ -291,7 +356,7 @@ impl Mp4Source {
         });
         // one entry per playable audio track (`playable` guarantees a sample description); a track
         // that somehow has none is dropped so `audio_streams` and `audios` stay index-aligned
-        let (atracks, (audio_streams, decode_rates)): (Vec<usize>, (Vec<AudioStreamInfo>, Vec<u32>)) =
+        let (atracks, (audio_streams, play_rates)): (Vec<usize>, (Vec<AudioStreamInfo>, Vec<u32>)) =
             atracks.into_iter().filter_map(|i| Some((i, audio_stream_info(file.tracks.get(i)?, &bytes)?))).unzip();
         let duration = vtrack.or(atracks.first().copied()).and_then(|i| file.tracks.get(i)).map(|t| presentation_duration(&file, t)).unwrap_or_default();
         let start_timecode = file.tracks.iter().find_map(|t| match t.codec() {
@@ -310,10 +375,11 @@ impl Mp4Source {
         };
         let audios: Vec<Mp4Audio> = atracks
             .iter()
-            .zip(info.audio_streams.iter().zip(decode_rates))
-            .filter_map(|(&i, (ainfo, decode_rate))| {
+            .zip(info.audio_streams.iter().zip(play_rates))
+            .filter_map(|(&i, (ainfo, play_rate))| {
                 let t = file.tracks.get(i)?;
-                let starts = audio_starts(&file, &bytes, i, ainfo.sample_rate, decode_rate);
+                let decode_rate = ainfo.sample_rate;
+                let starts = audio_starts(&file, &bytes, i, play_rate, decode_rate);
                 let ts = t.timescale.max(1) as i64;
                 let (offset, preroll) = match t.entries.first().map(|e| &e.codec) {
                     Some(CodecConfig::Opus(o)) => {
@@ -324,7 +390,8 @@ impl Mp4Source {
                     _ => (t.edit_offset, 0),
                 };
                 let state = Mutex::new(AudioState { decoder: None, packets: HashMap::new(), order: Vec::new(), last_decoded: None });
-                Some(Mp4Audio { track: i, state, starts, offset, preroll, decode_rate })
+                let play_offset = (play_rate != decode_rate).then(|| stretched_offset(t, play_rate, &starts, offset));
+                Some(Mp4Audio { track: i, state, starts, offset, preroll, decode_rate, play_rate, play_offset })
             })
             .collect();
         Ok(Self { info, bytes, file, vtrack, video: GopCache::new(explicit_color).with_rotation(rotation), audios })
@@ -441,15 +508,21 @@ impl MediaSource for Mp4Source {
         let ti = a.track;
         let track = self.file.tracks.get(ti).ok_or(MediaError::NoStream("audio"))?;
         let ainfo = self.info.audio_streams.get(stream).ok_or(MediaError::NoStream("audio"))?;
-        let src_rate = ainfo.sample_rate;
+        let src_rate = a.play_rate;
         let ch = ainfo.channels.max(1) as usize;
+        // a stretched stream is interpolated with a windowed sinc: SINC_HALF frames of context on
+        // each side of the window
+        let margin = if a.stretched() && src_rate != sample_rate { SINC_HALF as i64 } else { 0 };
         // Map the requested window to source samples (edit list offset applied: presentation = pts + edit_offset).
         let ratio = src_rate as f64 / sample_rate as f64;
         let p0 = (start as f64 * ratio).floor() as i64;
         // (in i128: a hostile edit list can make the offset large enough to overflow i64)
-        let offset = i128::from(a.offset) * i128::from(src_rate) / i128::from(track.timescale.max(1));
-        let s0 = i64::try_from(i128::from(p0) - offset).unwrap_or(if offset > 0 { i64::MIN } else { i64::MAX });
-        let need = (frames as f64 * ratio).ceil() as i64 + 2;
+        let offset = match a.play_offset {
+            Some(o) => i128::from(o),
+            None => i128::from(a.offset) * i128::from(src_rate) / i128::from(track.timescale.max(1)),
+        };
+        let s0 = i64::try_from(i128::from(p0) - offset).unwrap_or(if offset > 0 { i64::MIN } else { i64::MAX }).saturating_sub(margin);
+        let need = (frames as f64 * ratio).ceil() as i64 + 2 + 2 * margin;
         let mut src: Vec<Vec<f32>> = vec![vec![0.0; need.max(0) as usize]; ch];
         let mut st = a.state.lock().unwrap_or_else(|e| e.into_inner());
         let first = a.starts.partition_point(|&x| x <= s0.max(0)).saturating_sub(1);
@@ -484,6 +557,24 @@ impl MediaSource for Mp4Source {
         // offset is already in `s0` and must not shift the read position a second time.
         let frac = p0 as f64 - start as f64 * ratio;
         let mut out = AudioBuffer::silence(sample_rate, ch, frames);
+        if margin > 0 {
+            // pass the source band (below its own lowpass) and, going down, stop at the output's
+            let cutoff = (sample_rate as f64 / src_rate as f64).min(1.0) * 0.9;
+            for k in 0..frames {
+                let pos = k as f64 * ratio - frac + margin as f64;
+                let i0 = pos.floor().max(0.0);
+                let w = sinc_weights(pos - i0, cutoff);
+                let first = (i0 as usize + 1).saturating_sub(SINC_HALF);
+                for c in 0..ch {
+                    let Some(s) = src.get(c) else { continue };
+                    let v: f32 = w.iter().enumerate().map(|(j, wj)| s.get(first + j).copied().unwrap_or(0.0) * wj).sum();
+                    if let Some(o) = out.channels.get_mut(c).and_then(|o| o.get_mut(k)) {
+                        *o = v;
+                    }
+                }
+            }
+            return Ok(out);
+        }
         for k in 0..frames {
             let pos = k as f64 * ratio - frac;
             let i0 = pos.floor().max(0.0) as usize;
@@ -499,7 +590,7 @@ impl MediaSource for Mp4Source {
 }
 
 /// What the file says about one audio track (`None`: the track has no sample description).
-/// Also returns the rate the decoder runs at, which differs from the reported one when the
+/// Also returns the rate the decoded samples play at, slower than the reported one when the
 /// timestamps stretch the audio ([`stretched_rate`]).
 fn audio_stream_info(t: &filmcraft_isobmff::Track, bytes: &crate::Src) -> Option<(AudioStreamInfo, u32)> {
     let entry = t.entries.first()?;
@@ -535,8 +626,8 @@ fn audio_stream_info(t: &filmcraft_isobmff::Track, bytes: &crate::Src) -> Option
         }
         _ => None,
     };
-    let info = AudioStreamInfo { sample_rate: played.unwrap_or(rate), channels: ch.max(1), codec: audio_label(&entry.codec, rate), bits_per_sample: bits };
-    Some((info, rate))
+    let info = AudioStreamInfo { sample_rate: rate, channels: ch.max(1), codec: audio_label(&entry.codec, rate), bits_per_sample: bits };
+    Some((info, played.unwrap_or(rate)))
 }
 
 /// The audio codec as people know it: AAC names its profile, and an AAC-LC configuration whose

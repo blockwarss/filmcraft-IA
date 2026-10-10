@@ -242,14 +242,41 @@ fn audio_slowed_through_its_timestamps_plays_without_holes() {
     let bytes: Arc<[u8]> = w.finish().unwrap().into_inner().into();
     let src = Mp4Source::open("slowed.mp4", bytes).unwrap();
     let span: u64 = durations.iter().map(|&d| u64::from(d)).sum();
-    let want_rate = (units.len() as u64 * 1024 * u64::from(rate) / span) as u32;
     let info = src.info().audio_streams.first().cloned().unwrap();
-    assert_eq!(info.sample_rate, want_rate, "the stream plays at the rate that fills its timestamps");
+    // the stream keeps its own rate (a sequence made from the clip is at 44.1 kHz, not at the
+    // stretched rate); the stretch happens inside the source
+    assert_eq!(info.sample_rate, rate);
     // played at 44.1 kHz: past the priming, up to a frame before the end, no run of silence
     let frames = span as usize - 4096;
     let got = played(&src, rate, frames);
     let steady: Vec<Vec<f32>> = got.iter().map(|c| c[4096..].to_vec()).collect();
     assert_eq!(holes(&steady), 0, "no silence between frames");
+    // and no hiss: an 8 kHz tone plays at about 4 kHz; linear interpolation folded it back at
+    // the stretched rate's mirror (about 18 kHz, -27 dB), the windowed sinc keeps it far below
+    let hi = (0..rate as usize).map(|i| 0.5 * (std::f32::consts::TAU * 8_000.0 * i as f32 / rate as f32).sin()).collect::<Vec<f32>>();
+    let mut enc = filmcraft_aac::Encoder::new(filmcraft_aac::EncoderConfig::cbr(rate, 2, 160_000)).unwrap();
+    let mut hi_units = enc.encode(&[&hi, &hi]);
+    hi_units.extend(enc.flush());
+    let mut w = Mp4Writer::new(Cursor::new(Vec::new()), WriterOptions::new(Brand::Mp4)).unwrap();
+    let t = w.add_track(TrackConfig::new(SampleEntry::aac(enc.audio_specific_config(), 2, rate), rate)).unwrap();
+    for (k, u) in hi_units.iter().enumerate() {
+        w.write_sample(t, WriteSample { data: u, duration: if k % 10 == 9 { 2905 } else { 1965 }, composition_offset: 0, is_sync: true }).unwrap();
+    }
+    let src_hi = Mp4Source::open("slowed-hi.mp4", w.finish().unwrap().into_inner().into()).unwrap();
+    let tone = src_hi.audio(rate as i64, 8192, rate).unwrap().channels[0].clone();
+    let level = |hz: f32| {
+        let (mut re, mut im) = (0f32, 0f32);
+        for (n, v) in tone.iter().enumerate() {
+            let w = 0.5 - 0.5 * (std::f32::consts::TAU * n as f32 / tone.len() as f32).cos();
+            let ph = std::f32::consts::TAU * hz * n as f32 / rate as f32;
+            re += v * w * ph.cos();
+            im += v * w * ph.sin();
+        }
+        (re * re + im * im).sqrt()
+    };
+    let fundamental = (3_800..4_200).step_by(5).map(|f| level(f as f32)).fold(0f32, f32::max);
+    let images = (16_000..20_000).step_by(5).map(|f| level(f as f32)).fold(0f32, f32::max);
+    assert!(images < fundamental * 3e-3, "images {images} vs tone {fundamental}");
     // the 440 Hz tone comes out an octave down (zero crossings over a second)
     let second = &got[0][8192..8192 + rate as usize];
     let crossings = second.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
