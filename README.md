@@ -234,6 +234,16 @@ Every menu item, button, slider and drag in FilmCraft is a **command** with an i
 
 The trailer and the grades in these screenshots were built exactly this way, by an agent driving the running app.
 
+### Edit with Claude, on your Claude plan
+
+Claude can edit in FilmCraft like a professional editor — TikTok / Reels / Shorts, YouTube videos, gaming montages — with **your Claude Pro or Max plan, no API key**: the **Claude panel** inside the app (Window ▸ Claude, uses your Claude Code), **Claude Desktop** (`filmcraft-cli claude install`) or **Claude Code**:
+
+```text
+/plugin install filmcraft --marketplace blockwarss/filmcraft-IA
+```
+
+It comes with editing recipes (jump cuts, beat sync, punch zooms, styled captions and titles, vertical reframing), ~60 original sound effects, generated royalty-free music with exact beat grids, CC0 / CC BY libraries and Google Fonts. See [docs/claude.md](docs/claude.md).
+
 <br>
 
 ## Everywhere
@@ -270,6 +280,7 @@ The control protocol is documented in [docs/control-protocol.md](docs/control-pr
 | [AGENTS.md](AGENTS.md) | The rules every contributor must follow: assets, clean room, licences |
 | [docs/architecture.md](docs/architecture.md) | Layers, data model, time base, command system, render and export pipeline |
 | [docs/testing.md](docs/testing.md) | Unit, property and ffmpeg-oracle tests, accuracy criteria, benchmarks |
+| [docs/claude.md](docs/claude.md) | Editing with Claude (panel, Claude Desktop, Claude Code), studio recipes, sounds and music |
 | [docs/agents.md](docs/agents.md) | Driving FilmCraft over MCP and the control channel; how agents develop it |
 | [docs/control-protocol.md](docs/control-protocol.md) | Control-channel and MCP reference |
 | [docs/project-files.md](docs/project-files.md) | `.fcproj` format, schema migrations, auto-save and crash recovery |

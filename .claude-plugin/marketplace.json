@@ -1,0 +1,13 @@
+{
+  "name": "filmcraft",
+  "owner": { "name": "FilmCraft contributors" },
+  "metadata": { "description": "FilmCraft for Claude: a professional video editor Claude drives with your Claude plan." },
+  "plugins": [
+    {
+      "name": "filmcraft",
+      "source": "./plugins/filmcraft",
+      "description": "Edit videos like a professional with FilmCraft (TikTok, YouTube, gaming montages): editor skill, slash commands and the FilmCraft MCP server.",
+      "category": "productivity"
+    }
+  ]
+}

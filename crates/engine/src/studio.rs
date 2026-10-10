@@ -1249,6 +1249,50 @@ fn export_settings(s: &mut Session, p: &Value) -> Result<Value> {
     }))
 }
 
+// ------------------------------------------------------------------------------- Claude
+
+/// Port the desktop app listens on for Claude unless configured otherwise.
+pub const CLAUDE_PORT: u16 = 9876;
+
+/// `<data dir>/claude.json`: whether the desktop app opens its control port for Claude (Claude
+/// Desktop, Claude Code, the Claude panel) when it starts, and on which port. Written by
+/// `filmcraft-cli claude install` and the Claude panel.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ClaudeSettings {
+    pub listen: bool,
+    pub port: u16,
+}
+
+impl Default for ClaudeSettings {
+    fn default() -> Self {
+        ClaudeSettings { listen: false, port: CLAUDE_PORT }
+    }
+}
+
+fn claude_settings_path() -> Option<PathBuf> {
+    crate::autosave::default_data_dir().map(|d| d.join("claude.json"))
+}
+
+/// The saved settings (defaults when missing or unreadable; a port below 1024 reads as the default).
+pub fn claude_settings() -> ClaudeSettings {
+    let mut c: ClaudeSettings = claude_settings_path().and_then(|p| std::fs::read(p).ok()).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default();
+    if c.port < 1024 {
+        c.port = CLAUDE_PORT;
+    }
+    c
+}
+
+pub fn save_claude_settings(c: &ClaudeSettings) -> std::result::Result<PathBuf, String> {
+    let p = claude_settings_path().ok_or("no data folder on this platform")?;
+    if let Some(d) = p.parent() {
+        std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+    }
+    let text = serde_json::to_string_pretty(c).map_err(|e| e.to_string())?;
+    std::fs::write(&p, text).map_err(|e| format!("{}: {e}", p.display()))?;
+    Ok(p)
+}
+
 // ------------------------------------------------------------------------------- registry
 
 fn always(_: &Session) -> std::result::Result<(), String> {

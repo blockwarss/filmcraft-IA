@@ -112,7 +112,14 @@ pub fn install_desktop(exe: &Path, port: u16, dry_run: bool) -> Result<String, S
         std::fs::write(&bak, o).map_err(|e| format!("{}: {e}", bak.display()))?;
     }
     std::fs::write(&path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+    listen(port)?;
     Ok(format!("Claude Desktop: added the \"{SERVER}\" server to {} — quit and reopen Claude Desktop", path.display()))
+}
+
+/// Make the desktop app open its control port for Claude whenever it starts (so Claude reaches a
+/// FilmCraft the user opened by hand instead of starting a second one).
+pub fn listen(port: u16) -> Result<(), String> {
+    filmcraft_engine::studio::save_claude_settings(&filmcraft_engine::studio::ClaudeSettings { listen: true, port }).map(|_| ())
 }
 
 pub fn uninstall_desktop() -> Result<String, String> {
@@ -141,7 +148,8 @@ pub fn install_code(exe: &Path, port: u16, dry_run: bool) -> Result<String, Stri
     if !out.status.success() {
         return Err(format!("`claude mcp add` failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
-    Ok("Claude Code: added the \"filmcraft\" MCP server (user scope). For the editor skill and /filmcraft commands also run:\n  /plugin marketplace add blockwarss/filmcraft-IA\n  /plugin install filmcraft@filmcraft".into())
+    listen(port)?;
+    Ok("Claude Code: added the \"filmcraft\" MCP server (user scope). For the editor skill and the /filmcraft:… commands, in Claude Code run:\n  /plugin install filmcraft --marketplace blockwarss/filmcraft-IA".into())
 }
 
 pub fn uninstall_code() -> Result<String, String> {
@@ -166,6 +174,7 @@ pub fn status(port: u16) -> Value {
         "app": find_app().map(|p| p.to_string_lossy().into_owned()),
         "appListening": reachable,
         "port": port,
+        "appListensAtStartup": filmcraft_engine::studio::claude_settings().listen,
         "studioFolder": filmcraft_engine::studio::library_dir().map(|p| p.to_string_lossy().into_owned()),
     })
 }

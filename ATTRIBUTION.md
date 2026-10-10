@@ -108,6 +108,8 @@ is traced or derived from Adobe artwork.
 | Lumetri "Look" presets (Teal & Orange, Warm Film, …) | `crates/render/src/effects.rs` (`apply_look`): procedural colour transforms, not LUT files |
 | Lumetri Presets (Effects panel: Cinematic, Film Emulation, Monochrome, Technical) and their preview picture | `crates/render/src/lumetri_presets.rs`: Lumetri parameter values chosen by contributors, descriptive names, and a procedural preview picture (dusk sky, ridges, lake, grey ramp, colour chips) |
 | Colour palette and layout metrics | `crates/ui-egui/src/theme.rs`: colour values and sizes only; no artwork |
+| Studio sound effects (whoosh, boom, riser, glitch, coin, level up, explosion, block break, …) | `crates/audio-dsp/src/sfx.rs`: synthesised from oscillators, noise, filters and envelopes (`crates/audio-dsp/src/synth.rs`); no recordings or samples. Written as WAV files to the user's studio folder when used |
+| Studio music beds (phonk, trap, EDM, chiptune, lo-fi, chill, cinematic) | `crates/audio-dsp/src/music.rs`: procedural drum patterns, chord progressions and seeded melodies on synthesised voices; no samples, loops or third-party melodies |
 
 ## Optional build input: craft-fonts
 
@@ -152,6 +154,17 @@ the original copyright and permission notice in its header.
 | `crates/platform/src/nvenc/ffi.rs` | NVIDIA Corporation (`nvEncodeAPI.h`); FilmCraft contributors (Rust transcription) | Structures (including `NV_ENC_CONFIG_HEVC` and its bit-field masks, `NV_ENC_PIC_PARAMS_HEVC`, `NV_ENC_SEI_PAYLOAD`, `NV_ENC_TIME_CODE`), function table, codec / profile GUIDs (H.264, HEVC Main, HEVC Main 10) and constants (`NV_ENC_LEVEL_HEVC_*`, tier, CU size, `NV_ENC_BUFFER_FORMAT_YUV420_10BIT`, `NV_ENC_CAPS_SUPPORT_10BIT_ENCODE`, BT.2020 / PQ / HLG VUI codes) transcribed from `nvEncodeAPI.h`, NVIDIA Video Codec SDK, API 12.1 (https://developer.nvidia.com/video-codec-sdk) | MIT (Copyright (c) 2010-2023 NVIDIA Corporation; notice kept in the file header) |
 
 ## Downloaded at runtime
+
+### Studio libraries (on request, by an agent or the user)
+
+`library_download` and `fonts_install` (MCP tools, `crates/automation/src/online.rs`) save files in
+the per-user studio folder (`<data dir>/studio/downloads/`), never in the repository or the app
+bundle. Audio comes from Openverse (`api.openverse.org`; Freesound, Wikimedia Commons, ccMixter…)
+and is limited to CC0, public domain, CC BY and CC BY-SA; each file gets an `.attribution` sidecar
+with the author, source, licence and credit line. Fonts come from Google Fonts
+(`fonts.google.com` / `fonts.gstatic.com`, SIL OFL / Apache-2.0 / UFL) with their licence text.
+
+### Speech models
 
 These files are never in the repository or the app bundle. FilmCraft downloads them into the
 per-user data directory (`<data dir>/models/<id>/`) only after the user confirms a dialog that shows

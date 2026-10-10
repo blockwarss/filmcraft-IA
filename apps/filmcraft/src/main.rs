@@ -26,6 +26,7 @@ mod app_nap;
 mod args;
 mod audio;
 mod audio_in;
+mod claude_host;
 mod control_server;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
@@ -253,7 +254,18 @@ fn main() -> eframe::Result {
             if let Some(port) = control_port {
                 let rx = control_server::start(port, cc.egui_ctx.clone());
                 app = app.with_control(rx);
+            } else if filmcraft_engine::studio::claude_settings().listen {
+                // `filmcraft-cli claude install` / the Claude panel: Claude Desktop and Claude
+                // Code reach the FilmCraft the user opened instead of starting another one
+                let port = filmcraft_engine::studio::claude_settings().port;
+                if let Some(rx) = control_server::try_start(port, cc.egui_ctx.clone()) {
+                    app = app.with_control(rx);
+                }
             }
+            // Claude panel: the user's Claude Code, bridged to this window
+            app.hooks.claude = Some(Box::new(claude_host::ClaudeCode::new()));
+            let ctx = cc.egui_ctx.clone();
+            app.hooks.start_control = Some(Box::new(move |port| control_server::try_start(port, ctx.clone())));
             Ok(Box::new(app))
         }),
     );

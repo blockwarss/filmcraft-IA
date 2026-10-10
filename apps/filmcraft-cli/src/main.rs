@@ -439,7 +439,7 @@ async fn cli() {
                 Some(addr) => {
                     let mut client = BridgeClient::new(addr).unwrap_or_else(|e| fail(e));
                     if a.flag("--launch") {
-                        match a.opt("--app").map(std::path::PathBuf::from).or_else(claude::find_app) {
+                        match a.opt("--app").filter(|p| !p.trim().is_empty()).map(std::path::PathBuf::from).or_else(claude::find_app) {
                             Some(app) => client = client.with_launch(app),
                             None => eprintln!("filmcraft-cli: --launch: the FilmCraft app was not found (pass --app <path>); open it yourself"),
                         }

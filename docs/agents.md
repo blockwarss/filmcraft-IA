@@ -54,6 +54,15 @@ claude mcp add filmcraft-headless -- /abs/path/filmcraft/target/release/filmcraf
 | `ui_type` | bridge | type text into the focused field |
 | `ui_screenshot` | bridge | PNG of the window or one `panel` |
 | `ui_control` | bridge | call any control-channel method directly (`ui.set`, `ui.scroll`, `ui.timeline.locate`, …) |
+| `studio_overview` | both | the studio recipes (`studio.*` commands), sound-effect catalogue, music styles and the playbook in short |
+| `library_search` / `library_download` | both | CC0 / CC BY music and sound effects from Openverse; download, import, place, credit line |
+| `fonts_search` / `fonts_install` | both | font ideas for titles and captions; install a Google Fonts family |
+
+Resources: `filmcraft://document`, `filmcraft://commands` and `filmcraft://guide` (the editor
+playbook). Prompts: `tiktok_edit`, `gaming_montage`, `youtube_edit`, `trend_sound_edit`,
+`find_viral_clips`, `captions`, `review_edit`. `mcp --bridge … --launch` starts the desktop app when
+nothing answers. Setting up Claude Desktop / Claude Code and the in-app Claude panel:
+[claude.md](claude.md).
 
 Typical loop: `project_inspect` / `sequence_inspect` → get ids → `command_run` → `render_frame` or
 `ui_screenshot` → look at the result → `edit.undo` if it's wrong.

@@ -1,0 +1,10 @@
+{
+  "name": "filmcraft",
+  "version": "0.5.0",
+  "description": "Edit videos like a professional with FilmCraft: TikTok/Reels/Shorts, YouTube and gaming montages — jump cuts, beat sync, captions, titles, original sound effects and music, free fonts and CC0/CC BY libraries. Runs on your Claude plan, no API key.",
+  "author": { "name": "FilmCraft contributors" },
+  "homepage": "https://github.com/blockwarss/filmcraft-IA/blob/main/docs/claude.md",
+  "repository": "https://github.com/blockwarss/filmcraft-IA",
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["video", "editing", "tiktok", "youtube", "gaming", "montage", "mcp"]
+}

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "filmcraft": {
+      "command": "filmcraft-cli",
+      "args": ["mcp", "--bridge", "127.0.0.1:9876", "--launch"]
+    }
+  }
+}

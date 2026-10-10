@@ -22,6 +22,22 @@ pub const MAX_LINE: usize = 4 * 1024 * 1024;
 /// Connections served at once; further ones get an error line and are closed.
 pub const MAX_CONNECTIONS: usize = 16;
 
+/// Like [`start`], but `None` when the port can't be opened (another FilmCraft has it): for the
+/// Claude panel and `claude.json`, which start the server after launch.
+pub fn try_start(port: u16, ctx: egui::Context) -> Option<Receiver<ControlRequest>> {
+    let listener = match TcpListener::bind(("127.0.0.1", port)) {
+        Ok(l) => l,
+        Err(e) => {
+            log::warn!("control server: 127.0.0.1:{port} is not available ({e})");
+            return None;
+        }
+    };
+    let (tx, rx) = channel::<ControlRequest>();
+    log::info!("control server listening on 127.0.0.1:{port} (Claude)");
+    std::thread::spawn(move || accept_loop(listener, tx, ctx));
+    Some(rx)
+}
+
 pub fn start(port: u16, ctx: egui::Context) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
     let listener = match TcpListener::bind(("127.0.0.1", port)) {

@@ -3480,3 +3480,30 @@
 	New Sequence	Nueva secuencia
 	Tracks	Pistas
 	tracks	pistas
+	Claude	Claude
+	Claude is not available in this version of FilmCraft.	Claude no está disponible en esta versión de FilmCraft.
+	Connect Claude Desktop or Claude Code to FilmCraft	Conecta Claude Desktop o Claude Code a FilmCraft
+	Claude Code {version} · your Claude plan, no API key	Claude Code {version} · tu plan de Claude, sin clave de API
+	Claude Code is not installed	Claude Code no está instalado
+	Checking Claude Code…	Comprobando Claude Code…
+	New Chat	Nueva conversación
+	Check Again	Volver a comprobar
+	Tell Claude what you want, like a brief to an editor:\n• “Make a TikTok from these clips, hype style, captions in yellow”\n• “Cut a Minecraft montage on a phonk beat, zoom on every kill”\n• “Remove the silences and add a lofi bed under my voice”\n\nClaude edits live in this window. Every change can be undone.	Dile a Claude lo que quieres, como un encargo a un editor:\n• “Haz un TikTok con estos clips, estilo épico, subtítulos en amarillo”\n• “Monta un video de Minecraft sobre un ritmo phonk, con zoom en cada kill”\n• “Quita los silencios y pon una base lofi bajo mi voz”\n\nClaude edita en directo en esta ventana. Cada cambio se puede deshacer.
+	In Claude Desktop or Claude Code, connect FilmCraft with:\n  filmcraft-cli claude install\nthen ask Claude to edit. It drives this window live.	En Claude Desktop o Claude Code, conecta FilmCraft con:\n  filmcraft-cli claude install\ny pide a Claude que edite. Controla esta ventana en directo.
+	Claude is editing	Claude está editando
+	Ask Claude to edit… (Enter to send, Shift+Enter for a new line)	Pide a Claude que edite… (Intro para enviar, Mayús+Intro para una línea nueva)
+	Send	Enviar
+	Desktop	Escritorio
+	Let Claude Desktop and Claude Code connect whenever FilmCraft is open	Permitir que Claude Desktop y Claude Code se conecten mientras FilmCraft esté abierto
+	Make it a TikTok	Convertir en TikTok
+	Gaming montage	Montaje gaming
+	Cut silences	Cortar silencios
+	Add music	Añadir música
+	Review my edit	Revisar mi edición
+	Cut Silences (Jump Cuts)	Cortar silencios (jump cuts)
+	Cut on the Beat	Cortar al ritmo
+	Format for Platform	Formato para plataforma
+	Guide Track	Pista guía
+	Mark Beats	Marcar pulsos
+	Studio	Estudio
+	Styled Captions	Subtítulos con estilo

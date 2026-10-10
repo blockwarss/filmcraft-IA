@@ -1,0 +1,64 @@
+{
+  "manifest_version": "0.2",
+  "name": "filmcraft",
+  "display_name": "FilmCraft",
+  "version": "0.5.0",
+  "description": "Let Claude edit your videos in FilmCraft like a professional editor — TikTok, YouTube and gaming montages.",
+  "long_description": "FilmCraft is a full, open-source video editor. With this extension Claude drives it for you: vertical short-form edits with hooks, jump cuts and captions; gaming montages cut to the beat with punch zooms, shakes and impacts; YouTube edits with B-roll, lower thirds and chapters. It brings ~60 original sound effects, generated royalty-free music (phonk, trap, EDM, chiptune, lo-fi, chill, cinematic) with exact beat grids, CC0/CC BY music and sounds from Openverse, Google Fonts, and one-click editing prompts. Everything runs on your Claude plan — no API key. FilmCraft opens automatically when Claude needs it.",
+  "author": { "name": "FilmCraft contributors", "url": "https://github.com/blockwarss/filmcraft-IA" },
+  "repository": { "type": "git", "url": "https://github.com/blockwarss/filmcraft-IA" },
+  "homepage": "https://github.com/blockwarss/filmcraft-IA",
+  "documentation": "https://github.com/blockwarss/filmcraft-IA/blob/main/docs/claude.md",
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "server/filmcraft-cli",
+    "mcp_config": {
+      "command": "${__dirname}/server/filmcraft-cli",
+      "args": ["mcp", "--bridge", "127.0.0.1:${user_config.port}", "--launch", "--app", "${user_config.app_path}"],
+      "env": {},
+      "platform_overrides": {
+        "win32": { "command": "${__dirname}/server/filmcraft-cli.exe" }
+      }
+    }
+  },
+  "tools": [
+    { "name": "studio_overview", "description": "Editing recipes, sound effects, music styles and the editor playbook" },
+    { "name": "command_run", "description": "Run any FilmCraft command (every edit, recipe and export)" },
+    { "name": "command_batch", "description": "Run several commands in order" },
+    { "name": "doc_inspect", "description": "The project and the active sequence" },
+    { "name": "render_preview", "description": "Look at a frame of the edit" },
+    { "name": "media_import", "description": "Import media files" },
+    { "name": "library_search", "description": "Search CC0 / CC BY music and sound effects online" },
+    { "name": "library_download", "description": "Download, import and place a free track or sound" },
+    { "name": "fonts_search", "description": "Font ideas for titles and captions" },
+    { "name": "fonts_install", "description": "Install a Google Font" },
+    { "name": "ui_screenshot", "description": "Screenshot of the FilmCraft window or a panel" },
+    { "name": "ui_click", "description": "Click in the FilmCraft window" }
+  ],
+  "tools_generated": true,
+  "prompts_generated": true,
+  "keywords": ["video", "editing", "tiktok", "youtube", "gaming", "montage", "captions", "music"],
+  "license": "MIT OR Apache-2.0",
+  "user_config": {
+    "port": {
+      "type": "number",
+      "title": "FilmCraft control port",
+      "description": "Local port FilmCraft listens on for Claude (127.0.0.1 only).",
+      "default": 9876,
+      "min": 1024,
+      "max": 65535,
+      "required": false
+    },
+    "app_path": {
+      "type": "string",
+      "title": "FilmCraft app (optional)",
+      "description": "Path of the FilmCraft program, if it isn't installed in the usual place.",
+      "default": "",
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"]
+  }
+}

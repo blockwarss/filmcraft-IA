@@ -337,3 +337,11 @@ fn keys_parse_like_musicians_write_them() {
     assert_eq!(key_p(&json!({"key": 14})).unwrap(), Some(2));
     assert!(key_p(&json!({"key": "H"})).is_err());
 }
+
+#[test]
+fn claude_settings_read_leniently() {
+    let c: ClaudeSettings = serde_json::from_str(r#"{"listen": true}"#).unwrap();
+    assert_eq!((c.listen, c.port), (true, CLAUDE_PORT));
+    assert!(serde_json::from_str::<ClaudeSettings>(r#"{"port": 70000}"#).is_err(), "out-of-range ports are refused, then defaulted by claude_settings()");
+    assert!(!ClaudeSettings::default().listen);
+}

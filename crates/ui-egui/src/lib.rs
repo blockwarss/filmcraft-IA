@@ -131,6 +131,11 @@ pub struct HostHooks {
     /// Open a file in its default application, or (`true`) reveal it in the file manager (Edit ▸
     /// Edit Original, Help ▸ Reveal Log Files).
     pub open_path: Option<Box<dyn FnMut(&str, bool) -> Result<(), String>>>,
+    /// Runs Claude (the user's Claude Code) for the Claude panel; `None` on hosts without it.
+    pub claude: Option<Box<dyn panels::claude::ClaudeHost>>,
+    /// Start the control server on a port (for the Claude panel and Claude Desktop) when the app
+    /// was started without `--control`; `None` when it can't listen.
+    pub start_control: Option<Box<dyn FnMut(u16) -> Option<Receiver<ControlRequest>>>>,
 }
 
 /// The command a [`HostHooks::pick_file_for_relink`] caller runs with the chosen file, for hosts
@@ -230,6 +235,8 @@ pub struct FilmcraftApp {
     /// Named textures (monitors, thumbnails) with the key they show.
     textures: HashMap<String, (FrameKey, TextureHandle)>,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// The Claude panel's conversation.
+    pub claude: panels::claude::ChatState,
     /// Requests waiting for the UI to show an element: (request, give-up time).
     deferred: Vec<(ControlRequest, f64)>,
     last_ui_time: f64,
@@ -433,6 +440,7 @@ impl FilmcraftApp {
             auto: Default::default(),
             textures: HashMap::new(),
             control_rx: None,
+            claude: Default::default(),
             deferred: Vec::new(),
             last_ui_time: 0.0,
             synthetic: Vec::new(),
@@ -474,6 +482,16 @@ impl FilmcraftApp {
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
         self
+    }
+
+    /// Whether the control server feeds this window.
+    pub fn has_control(&self) -> bool {
+        self.control_rx.is_some()
+    }
+
+    /// Start taking control requests from `rx` (a control server started after launch).
+    pub fn set_control(&mut self, rx: Receiver<ControlRequest>) {
+        self.control_rx = Some(rx);
     }
 
     pub fn services(&self) -> Arc<dyn Services> {
@@ -668,7 +686,8 @@ impl FilmcraftApp {
                 | PanelKind::AudioTrackMixer
                 | PanelKind::Text
                 | PanelKind::ReferenceMonitor
-                | PanelKind::Timecode => PanelKind::Source,
+                | PanelKind::Timecode
+                | PanelKind::Claude => PanelKind::Source,
                 _ => PanelKind::Project,
             };
             self.ui.dock.open_near(p, near);
@@ -1633,6 +1652,7 @@ impl eframe::App for FilmcraftApp {
         self.timeline_still = if self.ui.timeline.animating() { 0 } else { self.timeline_still.saturating_add(1) };
         let had_synthetic = !self.synthetic.is_empty();
         self.drain_control(ctx);
+        panels::claude::pump(self, ctx);
         if !self.synthetic.is_empty() && !had_synthetic {
             // Occluded macOS windows stop running `ui`; bring the window forward (without taking
             // keyboard focus) so the input is processed.
